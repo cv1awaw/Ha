@@ -1041,17 +1041,18 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await message.delete()
             logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
-            # Optionally, send a warning to the user
-            warning_message = escape_markdown(
-                "⚠️ Arabic messages are not allowed in this group.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=warning_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.debug(f"Sent warning to user {user.id} for Arabic message in group {group_id}.")
+            # Warning message removed to only delete the message without notifying the user
+            # If you ever want to send a message, uncomment the lines below
+            # warning_message = escape_markdown(
+            #     "⚠️ Arabic messages are not allowed in this group.",
+            #     version=2
+            # )
+            # await context.bot.send_message(
+            #     chat_id=user.id,
+            #     text=warning_message,
+            #     parse_mode='MarkdownV2'
+            # )
+            # logger.debug(f"Sent warning to user {user.id} for Arabic message in group {group_id}.")
         except Exception as e:
             logger.error(f"Error deleting message in group {group_id}: {e}")
 
