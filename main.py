@@ -1126,7 +1126,7 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"User {user.id} disabled message deletion for group {group_id}.")
 
-# ------------------- Message Handler Function -------------------
+# ------------------- Message Handler Functions -------------------
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1253,22 +1253,23 @@ def main():
     application.add_handler(CommandHandler("be_happy", be_happy_cmd))
     application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # New Command
 
-    # Register the new any message deletion handler
+    # **Register specific message handlers first**
+    # 1. Handle deleting Arabic messages
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_arabic_messages
+    ))
+
+    # 2. Handle any messages to delete during the deletion flag
     application.add_handler(MessageHandler(
         filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_any_messages
     ))
 
-    # Handle private messages for setting group name
+    # 3. Handle private messages for setting group name
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_private_message_for_group_name
-    ))
-
-    # Handle group messages for deleting Arabic messages
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-        delete_arabic_messages
     ))
 
     # Register error handler
