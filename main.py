@@ -7,7 +7,8 @@ import logging
 import html
 import fcntl
 from datetime import datetime
-from telegram import Update, ChatType
+from telegram import Update
+from telegram.constants import ChatType
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -563,9 +564,6 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             g_name_esc = escape_markdown(g_name_display, version=2)
             msg += f"*Group:* {g_name_esc}\n*Group ID:* `{g_id}`\n"
 
-            # Fetch linked TARAs (Removed in this iteration)
-            # Since TARAs are removed, we skip this section
-
             # Fetch deletion settings
             try:
                 conn = sqlite3.connect(DATABASE)
@@ -579,7 +577,7 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += "⚠️ Error retrieving deletion status.\n"
                 logger.error(f"Error retrieving deletion status for group {g_id}: {e}")
 
-            # Fetch group members (if any)
+            # Fetch bypassed users
             try:
                 conn = sqlite3.connect(DATABASE)
                 c = conn.cursor()
@@ -635,6 +633,82 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing /show command: {e}")
         message = escape_markdown("⚠️ Failed to retrieve list information. Please try again later.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+
+async def group_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /group_id command to retrieve the group ID.
+    Only the authorized user can use this command in private chat.
+    """
+    user = update.effective_user
+    group = update.effective_chat
+    user_id = user.id
+    logger.debug(f"/group_id command called by user {user_id} in chat {group.id}")
+    
+    if user_id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+    
+    try:
+        if group.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+            group_id = group.id
+            message = escape_markdown(f"🔢 *Group ID:* `{group_id}`", version=2)
+            await update.message.reply_text(
+                message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"Sent Group ID {group_id} to user {user_id}")
+        else:
+            # If in private chat
+            message = escape_markdown(f"🔢 *Your User ID:* `{user_id}`", version=2)
+            await update.message.reply_text(
+                message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"Sent User ID {user_id} to user in private chat")
+    except Exception as e:
+        logger.error(f"Error handling /group_id command: {e}")
+        message = escape_markdown("⚠️ An error occurred while processing the command.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /help command to display available commands.
+    """
+    user = update.effective_user
+    logger.debug(f"/help command called by user {user.id}, ALLOWED_USER_ID={ALLOWED_USER_ID}")
+    if user.id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+    help_text = """*Available Commands:*
+• `/start` - Check if bot is running
+• `/group_add <group_id>` - Register a group (use the exact chat_id of the group)
+• `/rmove_group <group_id>` - Remove a registered group
+• `/bypass <user_id>` - Add a user to bypass warnings
+• `/unbypass <user_id>` - Remove a user from bypass warnings
+• `/group_id` - Retrieve the current group or your user ID
+• `/show` - Show all groups and their deletion status
+• `/info` - Show current bot configuration
+• `/help` - Show this help
+• `/list` - Comprehensive overview of groups and bypassed users
+• `/be_sad <group_id>` - Enable automatic deletion of Arabic messages in a group
+• `/be_happy <group_id>` - Disable automatic deletion of Arabic messages in a group
+"""
+    try:
+        # Escape special characters for MarkdownV2
+        help_text_esc = escape_markdown(help_text, version=2)
+        await update.message.reply_text(
+            help_text_esc,
+            parse_mode='MarkdownV2'
+        )
+        logger.info("Displayed help information to user.")
+    except Exception as e:
+        logger.error(f"Error sending help information: {e}")
+        message = escape_markdown("⚠️ An error occurred while sending the help information.", version=2)
         await update.message.reply_text(
             message,
             parse_mode='MarkdownV2'
@@ -715,82 +789,6 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing /info command: {e}")
         message = escape_markdown("⚠️ Failed to retrieve information. Please try again later.", version=2)
-        await update.message.reply_text(
-            message,
-            parse_mode='MarkdownV2'
-        )
-
-async def group_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /group_id command to retrieve the group ID.
-    Only the authorized user can use this command in private chat.
-    """
-    user = update.effective_user
-    group = update.effective_chat
-    user_id = user.id
-    logger.debug(f"/group_id command called by user {user_id} in chat {group.id}")
-    
-    if user_id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
-        return  # Only respond to authorized user in private chat
-    
-    try:
-        if group.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-            group_id = group.id
-            message = escape_markdown(f"🔢 *Group ID:* `{group_id}`", version=2)
-            await update.message.reply_text(
-                message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Sent Group ID {group_id} to user {user_id}")
-        else:
-            # If in private chat
-            message = escape_markdown(f"🔢 *Your User ID:* `{user_id}`", version=2)
-            await update.message.reply_text(
-                message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Sent User ID {user_id} to user in private chat")
-    except Exception as e:
-        logger.error(f"Error handling /group_id command: {e}")
-        message = escape_markdown("⚠️ An error occurred while processing the command.", version=2)
-        await update.message.reply_text(
-            message,
-            parse_mode='MarkdownV2'
-        )
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /help command to display available commands.
-    """
-    user = update.effective_user
-    logger.debug(f"/help command called by user {user.id}, ALLOWED_USER_ID={ALLOWED_USER_ID}")
-    if user.id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
-        return  # Only respond to authorized user in private chat
-    help_text = """*Available Commands:*
-• `/start` - Check if bot is running
-• `/group_add <group_id>` - Register a group (use the exact chat_id of the group)
-• `/rmove_group <group_id>` - Remove a registered group
-• `/bypass <user_id>` - Add a user to bypass warnings
-• `/unbypass <user_id>` - Remove a user from bypass warnings
-• `/group_id` - Retrieve the current group or your user ID
-• `/show` - Show all groups and their deletion status
-• `/info` - Show current bot configuration
-• `/help` - Show this help
-• `/list` - Comprehensive overview of groups and bypassed users
-• `/be_sad <group_id>` - Enable automatic deletion of Arabic messages in a group
-• `/be_happy <group_id>` - Disable automatic deletion of Arabic messages in a group
-"""
-    try:
-        # Escape special characters for MarkdownV2
-        help_text_esc = escape_markdown(help_text, version=2)
-        await update.message.reply_text(
-            help_text_esc,
-            parse_mode='MarkdownV2'
-        )
-        logger.info("Displayed help information to user.")
-    except Exception as e:
-        logger.error(f"Error sending help information: {e}")
-        message = escape_markdown("⚠️ An error occurred while sending the help information.", version=2)
         await update.message.reply_text(
             message,
             parse_mode='MarkdownV2'
