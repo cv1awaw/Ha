@@ -9,7 +9,6 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
-from typing import Set
 
 # Enable logging
 logging.basicConfig(
@@ -27,7 +26,7 @@ ALLOWED_USER_ID = 6177929931  # Replace with your actual Telegram user ID
 # File to store muted user IDs
 MUTED_USERS_FILE = "muted_users.json"
 
-def load_muted_users() -> Set[int]:
+def load_muted_users() -> set:
     """Load muted user IDs from a JSON file."""
     if not os.path.exists(MUTED_USERS_FILE):
         return set()
@@ -39,7 +38,7 @@ def load_muted_users() -> Set[int]:
         logger.error(f"Failed to load muted users: {e}")
         return set()
 
-def save_muted_users(muted_users: Set[int]) -> None:
+def save_muted_users(muted_users: set) -> None:
     """Save muted user IDs to a JSON file."""
     try:
         with open(MUTED_USERS_FILE, "w") as file:
@@ -92,7 +91,7 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(f'User with ID {user_id_to_mute} has been muted.')
 
-# Optionally, you can add an /unmute command to allow unmuting users
+# Optional: Command handler for /unmute
 async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
 
@@ -119,13 +118,6 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     save_muted_users(muted_users)
 
     await update.message.reply_text(f'User with ID {user_id_to_unmute} has been unmuted.')
-
-# Middleware to check if user is muted before processing any command
-async def check_muted(update: Update, context: ContextTypes.DEFAULT_TYPE, next_handler) -> None:
-    if await is_user_muted(update):
-        await update.message.reply_text("You are muted and cannot use this bot.")
-        return
-    await next_handler()
 
 def main():
     if not BOT_TOKEN:
