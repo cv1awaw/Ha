@@ -32,7 +32,7 @@ ALLOWED_USER_ID = 6177929931  # Replace with your actual authorized user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
 
 # Define the timeframe (in seconds) to delete messages after user removal
-MESSAGE_DELETE_TIMEFRAME = 10  # seconds
+MESSAGE_DELETE_TIMEFRAME = 15  # Increased to 15 seconds to better capture system messages
 
 # ------------------- Logging Configuration -------------------
 
@@ -1173,28 +1173,6 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logger.error(f"Error deleting message in group {group_id}: {e}")
 
-# ------------------- New Message Handler: delete_system_messages -------------------
-
-async def delete_system_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Attempt to delete system messages indicating user removal.
-    Note: Telegram may restrict bots from deleting certain system messages.
-    """
-    message = update.message
-    if not message:
-        return
-
-    # Check if the message is a system message about user removal
-    # This checks if the bot removed a user
-    # System messages typically have left_chat_member set
-    if message.left_chat_member and message.left_chat_member.is_bot:
-        # This is likely the system message indicating the bot removed a user
-        try:
-            await message.delete()
-            logger.info(f"Deleted system message: {message.text}")
-        except Exception as e:
-            logger.error(f"Failed to delete system message: {e}")
-
 # ------------------- New Message Handler: delete_any_messages -------------------
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1274,12 +1252,6 @@ def main():
     application.add_handler(CommandHandler("be_sad", be_sad_cmd))
     application.add_handler(CommandHandler("be_happy", be_happy_cmd))
     application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # New Command
-
-    # Register the new system message handler
-    application.add_handler(MessageHandler(
-        filters.StatusUpdate.LEFT_CHAT_MEMBER & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-        delete_system_messages
-    ))
 
     # Register the new any message deletion handler
     application.add_handler(MessageHandler(
