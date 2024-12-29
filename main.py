@@ -25,7 +25,7 @@ from telegram.helpers import escape_markdown
 DATABASE = 'warnings.db'
 
 # Define the allowed user ID
-ALLOWED_USER_ID = 6177929931  # Replace with the actual authorized user ID
+ALLOWED_USER_ID = 6177929931  # Replace with your actual authorized user ID
 
 # Define the lock file path
 LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
@@ -37,6 +37,11 @@ logging.basicConfig(
     level=logging.INFO  # Change to DEBUG for more verbose output
 )
 logger = logging.getLogger(__name__)
+
+# ------------------- Pending Group Names -------------------
+
+# Dictionary to keep track of pending group names
+pending_group_names = {}
 
 # ------------------- Lock Mechanism -------------------
 
@@ -302,29 +307,33 @@ async def handle_private_message_for_group_name(update: Update, context: Context
                     f"✅ Group name for `{g_id}` set to: *{escaped_group_name}*",
                     version=2
                 )
-                await message.reply_text(
-                    confirmation_message,
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=confirmation_message,
                     parse_mode='MarkdownV2'
                 )
                 logger.info(f"Group name for {g_id} set to {group_name} by user {user.id}")
             except Exception as e:
                 error_message = escape_markdown("⚠️ Failed to set group name. Please try `/group_add` again.", version=2)
-                await message.reply_text(
-                    error_message,
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=error_message,
                     parse_mode='MarkdownV2'
                 )
                 logger.error(f"Error setting group name for {g_id} by user {user.id}: {e}")
         else:
             warning_message = escape_markdown("⚠️ Group name cannot be empty. Please try `/group_add` again.", version=2)
-            await message.reply_text(
-                warning_message,
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=warning_message,
                 parse_mode='MarkdownV2'
             )
             logger.warning(f"Empty group name received from user {user.id} for group {g_id}")
     else:
         warning_message = escape_markdown("⚠️ No pending group to set name for.", version=2)
-        await message.reply_text(
-            warning_message,
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=warning_message,
             parse_mode='MarkdownV2'
         )
         logger.warning(f"Received group name from user {user.id} with no pending group.")
@@ -357,7 +366,7 @@ async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user.id != ALLOWED_USER_ID:
         return  # Only respond to authorized user
-    
+
     if len(context.args) != 1:
         message = escape_markdown("⚠️ Usage: `/group_add <group_id>`", version=2)
         await context.bot.send_message(
@@ -1054,6 +1063,14 @@ def is_arabic(text):
     """
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
+# ------------------- Error Handler -------------------
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle errors that occur during updates.
+    """
+    logger.error("An error occurred:", exc_info=context.error)
+
 # ------------------- Main Function -------------------
 
 def main():
@@ -1116,14 +1133,6 @@ def main():
     except Exception as e:
         logger.critical(f"Bot encountered a critical error and is shutting down: {e}")
         sys.exit(f"Bot encountered a critical error and is shutting down: {e}")
-
-# ------------------- Error Handler -------------------
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle errors that occur during updates.
-    """
-    logger.error("An error occurred:", exc_info=context.error)
 
 if __name__ == '__main__':
     main()
