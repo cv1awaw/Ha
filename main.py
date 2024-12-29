@@ -25,8 +25,8 @@ from telegram.helpers import escape_markdown
 # Define the path to the SQLite database
 DATABASE = 'warnings.db'
 
-# Define the allowed user ID
-ALLOWED_USER_ID = 6177929931  # Replace with your actual authorized user ID
+# Define the allowed user ID (Replace with your actual authorized user ID)
+ALLOWED_USER_ID = 6177929931  # Example: 6177929931
 
 # Define the lock file path
 LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
@@ -83,10 +83,41 @@ atexit.register(release_lock, lock)
 
 # ------------------- Database Initialization -------------------
 
+def init_permissions_db():
+    """
+    Initialize the permissions and removed_users tables.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        
+        # Create permissions table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS permissions (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT NOT NULL
+            )
+        ''')
+        
+        # Create removed_users table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS removed_users (
+                user_id INTEGER PRIMARY KEY,
+                removal_reason TEXT,
+                removal_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logger.info("Permissions and Removed Users tables initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize permissions database: {e}")
+        raise
+
 def init_db():
     """
     Initialize the SQLite database and create necessary tables if they don't exist.
-    Removed tables related to TARAs and warnings.
     """
     try:
         conn = sqlite3.connect(DATABASE)
@@ -129,6 +160,9 @@ def init_db():
         conn.commit()
         conn.close()
         logger.info("Database initialized successfully.")
+        
+        # Initialize permissions-related tables
+        init_permissions_db()
     except Exception as e:
         logger.error(f"Failed to initialize the database: {e}")
         raise
@@ -288,6 +322,40 @@ def is_deletion_enabled(group_id):
     except Exception as e:
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
+
+def remove_user_from_permissions_removed_users(user_id):
+    """
+    Remove a user from the removed_users table in the permissions system.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('DELETE FROM removed_users WHERE user_id = ?', (user_id,))
+        changes = c.rowcount
+        conn.commit()
+        conn.close()
+        if changes > 0:
+            logger.info(f"User {user_id} removed from 'removed_users' table.")
+        else:
+            logger.warning(f"User {user_id} not found in 'removed_users' table.")
+    except Exception as e:
+        logger.error(f"Error removing user {user_id} from 'removed_users' table: {e}")
+        raise
+
+def revoke_user_permissions(user_id):
+    """
+    Revoke all permissions for a user by setting their role to 'removed'.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('UPDATE permissions SET role = ? WHERE user_id = ?', ('removed', user_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"Permissions revoked for user {user_id}. Role set to 'removed'.")
+    except Exception as e:
+        logger.error(f"Error revoking permissions for user {user_id}: {e}")
+        raise
 
 # ------------------- Flag for Message Deletion -------------------
 
@@ -956,11 +1024,37 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
         return
 
+    # Remove the user from the permissions system's removed_users table
+    try:
+        remove_user_from_permissions_removed_users(target_user_id)
+        logger.info(f"User {target_user_id} removed from 'Removed Users' in Permissions by user {user.id}")
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to update permissions system. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error removing user {target_user_id} from 'Removed Users' in Permissions: {e}")
+        return
+
+    # Revoke user's permissions
+    try:
+        revoke_user_permissions(target_user_id)
+        logger.info(f"Permissions revoked for user {target_user_id} in Permissions system.")
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to revoke user permissions. Please check the permissions system.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
+        return
+
     # Attempt to remove the user from the group
     try:
         await context.bot.ban_chat_member(chat_id=group_id, user_id=target_user_id)
-        # Optionally, you can use unban_chat_member after a delay to allow rejoining
-        # await context.bot.unban_chat_member(chat_id=group_id, user_id=target_user_id, only_if_banned=True)
         logger.info(f"User {target_user_id} has been removed from group {group_id} by bot.")
     except Exception as e:
         message = escape_markdown(f"⚠️ Failed to remove user `{target_user_id}` from group `{group_id}`. Ensure the bot has sufficient permissions.", version=2)
@@ -981,7 +1075,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send confirmation to the authorized user privately
     confirmation_message = escape_markdown(
-        f"✅ User `{target_user_id}` has been removed from group `{group_id}`.\nAny messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
+        f"✅ User `{target_user_id}` has been removed from group `{group_id}` and deleted from 'Removed Users' in Permissions.\nAny messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
         version=2
     )
     try:
@@ -990,7 +1084,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=confirmation_message,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id}.")
+        logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id} and Permissions.")
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
@@ -1172,8 +1266,6 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
             # logger.debug(f"Sent warning to user {user.id} for Arabic message in group {group_id}.")
         except Exception as e:
             logger.error(f"Error deleting message in group {group_id}: {e}")
-
-# ------------------- New Message Handler: delete_any_messages -------------------
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
