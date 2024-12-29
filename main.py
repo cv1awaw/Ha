@@ -8,7 +8,7 @@ import html
 import fcntl
 from datetime import datetime
 import re
-from telegram import Update
+from telegram import Update, Message
 from telegram.constants import ChatType
 from telegram.ext import (
     ApplicationBuilder,
@@ -786,6 +786,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/list` - Comprehensive overview of groups and bypassed users
 • `/be_sad <group_id>` - Enable automatic deletion of Arabic messages in a group
 • `/be_happy <group_id>` - Disable automatic deletion of Arabic messages in a group
+• `/rmove_user <group_id> <user_id>` - Remove a user from a group without notifications
 """
     try:
         # Escape special characters for MarkdownV2
@@ -889,7 +890,94 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='MarkdownV2'
         )
 
-# ------------------- Deletion Control Commands -------------------
+# ------------------- New Command: /rmove_user -------------------
+
+async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /rmove_user command to remove a user from a group without sending notifications.
+    Usage: /rmove_user <group_id> <user_id>
+    """
+    user = update.effective_user
+    logger.debug(f"/rmove_user command called by user {user.id} with args: {context.args}")
+
+    # Check if the user is authorized
+    if user.id != ALLOWED_USER_ID:
+        return  # Only respond to authorized user
+
+    # Check if the correct number of arguments is provided
+    if len(context.args) != 2:
+        message = escape_markdown("⚠️ Usage: `/rmove_user <group_id> <user_id>`", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Incorrect usage of /rmove_user by user {user.id}")
+        return
+
+    # Parse group_id and user_id
+    try:
+        group_id = int(context.args[0])
+        target_user_id = int(context.args[1])
+        logger.debug(f"Parsed group_id: {group_id}, user_id: {target_user_id}")
+    except ValueError:
+        message = escape_markdown("⚠️ Both `group_id` and `user_id` must be integers.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Non-integer group_id or user_id provided to /rmove_user by user {user.id}")
+        return
+
+    # Remove user from bypass_users list
+    try:
+        if remove_bypass_user(target_user_id):
+            logger.info(f"User {target_user_id} removed from bypass list by user {user.id}")
+        else:
+            logger.info(f"User {target_user_id} was not in the bypass list.")
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to update bypass list. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
+        return
+
+    # Attempt to remove the user from the group
+    try:
+        await context.bot.ban_chat_member(chat_id=group_id, user_id=target_user_id)
+        # Optionally, you can use unban_chat_member after a delay to allow rejoining
+        # await context.bot.unban_chat_member(chat_id=group_id, user_id=target_user_id, only_if_banned=True)
+        logger.info(f"User {target_user_id} has been removed from group {group_id} by bot.")
+    except Exception as e:
+        message = escape_markdown(f"⚠️ Failed to remove user `{target_user_id}` from group `{group_id}`. Ensure the bot has sufficient permissions.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error removing user {target_user_id} from group {group_id}: {e}")
+        return
+
+    # Send confirmation to the authorized user privately
+    confirmation_message = escape_markdown(
+        f"✅ User `{target_user_id}` has been removed from group `{group_id}`.",
+        version=2
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirmation_message,
+            parse_mode='MarkdownV2'
+        )
+        logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error sending confirmation message for /rmove_user: {e}")
+
+# ------------------- Existing Deletion Control Commands -------------------
 
 async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1056,6 +1144,28 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logger.error(f"Error deleting message in group {group_id}: {e}")
 
+# ------------------- New Message Handler: delete_system_messages -------------------
+
+async def delete_system_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Attempt to delete system messages indicating user removal.
+    Note: Telegram may restrict bots from deleting certain system messages.
+    """
+    message = update.message
+    if not message:
+        return
+
+    # Check if the message is a system message about user removal
+    # This checks if the bot removed a user
+    # System messages typically have left_chat_member set
+    if message.left_chat_member and message.left_chat_member.is_bot:
+        # This is likely the system message indicating the bot removed a user
+        try:
+            await message.delete()
+            logger.info(f"Deleted system message: {message.text}")
+        except Exception as e:
+            logger.error(f"Failed to delete system message: {e}")
+
 # ------------------- Utility Function -------------------
 
 def is_arabic(text):
@@ -1112,6 +1222,13 @@ def main():
     application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
     application.add_handler(CommandHandler("be_sad", be_sad_cmd))
     application.add_handler(CommandHandler("be_happy", be_happy_cmd))
+    application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # New Command
+
+    # Register the new system message handler
+    application.add_handler(MessageHandler(
+        filters.StatusUpdate.LEFT_CHAT_MEMBER & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_system_messages
+    ))
 
     # Handle private messages for setting group name
     application.add_handler(MessageHandler(
