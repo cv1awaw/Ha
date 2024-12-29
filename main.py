@@ -16,11 +16,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Bot Token
-BOT_TOKEN = "YOUR_TOKEN_HERE"  # Replace with your actual bot token
+# Bot Token from environment variable
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Ensure BOT_TOKEN is set in Railway's environment variables
 
 # Allowed user ID for banning
-ALLOWED_USER_ID = 6177929931  # Replace with the actual user ID
+ALLOWED_USER_ID = 6177929931  # Replace with your actual Telegram user ID
 
 # Command handler for /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -59,6 +59,10 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text('An error occurred while trying to ban the user.')
 
 def main():
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN environment variable not set. Please set it in Railway.com.")
+        return
+
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Register handlers
