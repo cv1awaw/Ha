@@ -1,7 +1,7 @@
 # main.py
 
-from telegram import Update, ChatPermissions
-from telegram.ext import Updater, CommandHandler, CallbackContext, Filters
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 import logging
 
 # Enable logging
@@ -19,7 +19,7 @@ ALLOWED_USER_ID = 6177929931
 
 # Command handler for /start
 def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text('Hello! I am your bot. Use /ban <username> to ban a user.')
+    update.message.reply_text('Hello! I am your bot. Use /ban <user_id> to ban a user.')
 
 # Command handler for /ban
 def ban(update: Update, context: CallbackContext) -> None:
@@ -32,18 +32,19 @@ def ban(update: Update, context: CallbackContext) -> None:
         return
 
     if len(context.args) == 0:
-        update.message.reply_text('Please specify a username to ban. Usage: /ban <username>')
+        update.message.reply_text('Please specify a user ID to ban. Usage: /ban <user_id>')
         return
 
-    username = context.args[0].lstrip('@')
     try:
-        # Attempt to ban the user by username
-        for member in chat.get_members():
-            if member.user.username == username:
-                context.bot.kick_chat_member(chat_id=chat.id, user_id=member.user.id)
-                update.message.reply_text(f'User @{username} has been banned.')
-                return
-        update.message.reply_text(f'User @{username} not found.')
+        user_id = int(context.args[0])
+    except ValueError:
+        update.message.reply_text('Invalid user ID. Please provide a numerical user ID.')
+        return
+
+    try:
+        # Attempt to ban the user by user ID
+        context.bot.kick_chat_member(chat_id=chat.id, user_id=user_id)
+        update.message.reply_text(f'User with ID {user_id} has been banned.')
     except Exception as e:
         logger.error(f'Error banning user: {e}')
         update.message.reply_text('An error occurred while trying to ban the user.')
@@ -53,7 +54,7 @@ def main():
     dispatcher = updater.dispatcher
 
     dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("ban", ban, Filters.group))
+    dispatcher.add_handler(CommandHandler("ban", ban, pass_args=True))
 
     updater.start_polling()
     updater.idle()
