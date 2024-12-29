@@ -1,0 +1,2 @@
+python-telegram-bot==20.3
+uvloop==0.17.0
