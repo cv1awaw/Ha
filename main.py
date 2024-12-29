@@ -7,6 +7,7 @@ import logging
 import html
 import fcntl
 from datetime import datetime
+import re
 from telegram import Update
 from telegram.constants import ChatType
 from telegram.ext import (
@@ -18,28 +19,26 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown
 
-# Import delete module functions
-import delete  # Ensure delete.py is in the same directory
+# ------------------- Configuration -------------------
 
 # Define the path to the SQLite database
 DATABASE = 'warnings.db'
 
 # Define the allowed user ID
-ALLOWED_USER_ID = 6177929931  # Authorized user ID
+ALLOWED_USER_ID = 6177929931  # Replace with the actual authorized user ID
 
-# Configure logging
+# Define the lock file path
+LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
+
+# ------------------- Logging Configuration -------------------
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Set to DEBUG for more verbose output
+    level=logging.INFO  # Change to DEBUG for more verbose output
 )
 logger = logging.getLogger(__name__)
 
-# Dictionary to keep track of pending group names
-pending_group_names = {}
-
-# ------------------- Lock Mechanism Start -------------------
-
-LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
+# ------------------- Lock Mechanism -------------------
 
 def acquire_lock():
     """
@@ -73,8 +72,7 @@ lock = acquire_lock()
 import atexit
 atexit.register(release_lock, lock)
 
-# -------------------- Lock Mechanism End --------------------
-
+# ------------------- Database Initialization -------------------
 
 def init_db():
     """
@@ -225,6 +223,61 @@ def remove_bypass_user(user_id):
             return False
     except Exception as e:
         logger.error(f"Error removing user {user_id} from bypass list: {e}")
+        return False
+
+def enable_deletion(group_id):
+    """
+    Enable message deletion for a specific group.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO deletion_settings (group_id, enabled)
+            VALUES (?, 1)
+            ON CONFLICT(group_id) DO UPDATE SET enabled=1
+        ''', (group_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Enabled message deletion for group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error enabling deletion for group {group_id}: {e}")
+        raise
+
+def disable_deletion(group_id):
+    """
+    Disable message deletion for a specific group.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO deletion_settings (group_id, enabled)
+            VALUES (?, 0)
+            ON CONFLICT(group_id) DO UPDATE SET enabled=0
+        ''', (group_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Disabled message deletion for group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error disabling deletion for group {group_id}: {e}")
+        raise
+
+def is_deletion_enabled(group_id):
+    """
+    Check if message deletion is enabled for a specific group.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (group_id,))
+        row = c.fetchone()
+        conn.close()
+        enabled = row[0] if row else False
+        logger.debug(f"Deletion enabled for group {group_id}: {enabled}")
+        return bool(enabled)
+    except Exception as e:
+        logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
 
 # ------------------- Command Handler Functions -------------------
@@ -794,6 +847,293 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='MarkdownV2'
         )
 
+# ------------------- Deletion Control Commands -------------------
+
+async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /be_sad command to enable message deletion in a group.
+    Usage: /be_sad <group_id>
+    """
+    user = update.effective_user
+    args = context.args
+    logger.debug(f"/be_sad called by user {user.id} with args: {args}")
+
+    # Check if the user is authorized
+    if user.id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+
+    if len(args) != 1:
+        message = escape_markdown("⚠️ Usage: `/be_sad <group_id>`", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Incorrect usage of /be_sad by user {user.id}")
+        return
+
+    try:
+        group_id = int(args[0])
+    except ValueError:
+        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Non-integer group_id provided to /be_sad by user {user.id}")
+        return
+
+    # Enable deletion
+    try:
+        enable_deletion(group_id)
+    except Exception:
+        message = escape_markdown("⚠️ Failed to enable message deletion. Please try again later.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        return
+
+    # Confirm to the user
+    confirmation_message = escape_markdown(
+        f"✅ Message deletion enabled for group `{group_id}`.",
+        version=2
+    )
+    await update.message.reply_text(
+        confirmation_message,
+        parse_mode='MarkdownV2'
+    )
+    logger.info(f"User {user.id} enabled message deletion for group {group_id}.")
+
+async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /be_happy command to disable message deletion in a group.
+    Usage: /be_happy <group_id>
+    """
+    user = update.effective_user
+    args = context.args
+    logger.debug(f"/be_happy called by user {user.id} with args: {args}")
+
+    # Check if the user is authorized
+    if user.id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+
+    if len(args) != 1:
+        message = escape_markdown("⚠️ Usage: `/be_happy <group_id>`", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Incorrect usage of /be_happy by user {user.id}")
+        return
+
+    try:
+        group_id = int(args[0])
+    except ValueError:
+        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Non-integer group_id provided to /be_happy by user {user.id}")
+        return
+
+    # Disable deletion
+    try:
+        disable_deletion(group_id)
+    except Exception:
+        message = escape_markdown("⚠️ Failed to disable message deletion. Please try again later.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+        return
+
+    # Confirm to the user
+    confirmation_message = escape_markdown(
+        f"✅ Message deletion disabled for group `{group_id}`.",
+        version=2
+    )
+    await update.message.reply_text(
+        confirmation_message,
+        parse_mode='MarkdownV2'
+    )
+    logger.info(f"User {user.id} disabled message deletion for group {group_id}.")
+
+# ------------------- Message Handler Function -------------------
+
+async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Delete messages containing Arabic text in groups where deletion is enabled.
+    """
+    message = update.message
+    if not message or not message.text:
+        logger.debug("Received a non-text or empty message.")
+        return  # Ignore non-text messages
+
+    user = message.from_user
+    chat = message.chat
+    group_id = chat.id
+
+    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text}")
+
+    # Check if deletion is enabled for this group
+    if not is_deletion_enabled(group_id):
+        logger.debug(f"Deletion not enabled for group {group_id}.")
+        return
+
+    # Check if the user is bypassed
+    if is_bypass_user(user.id):
+        logger.debug(f"User {user.id} is bypassed. Message will not be deleted.")
+        return
+
+    # Check if the message contains Arabic
+    if is_arabic(message.text):
+        try:
+            await message.delete()
+            logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
+            # Optionally, send a warning to the user
+            warning_message = escape_markdown(
+                "⚠️ Arabic messages are not allowed in this group.",
+                version=2
+            )
+            await message.reply_text(
+                warning_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.debug(f"Sent warning to user {user.id} for Arabic message in group {group_id}.")
+        except Exception as e:
+            logger.error(f"Error deleting message in group {group_id}: {e}")
+
+# ------------------- Utility Function -------------------
+
+def is_arabic(text):
+    """
+    Check if the text contains any Arabic characters.
+    """
+    return bool(re.search(r'[\u0600-\u06FF]', text))
+
+# ------------------- Information Commands -------------------
+
+async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /info command to show current configuration.
+    """
+    user = update.effective_user
+    user_id = user.id
+    logger.debug(f"/info command called by user {user_id}")
+
+    if user_id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+
+        # Fetch all groups and their deletion settings
+        c.execute('''
+            SELECT g.group_id, g.group_name, ds.enabled
+            FROM groups g
+            LEFT JOIN deletion_settings ds ON g.group_id = ds.group_id
+        ''')
+        groups = c.fetchall()
+
+        # Fetch all bypassed users
+        c.execute('''
+            SELECT user_id FROM bypass_users
+        ''')
+        bypass_users = c.fetchall()
+
+        conn.close()
+
+        msg = "*Bot Information:*\n\n"
+        msg += "*Registered Groups:*\n"
+        if groups:
+            for g_id, g_name, enabled in groups:
+                g_name_display = g_name if g_name else "No Name Set"
+                deletion_status = "Enabled" if enabled else "Disabled"
+                msg += f"• *Group Name:* {escape_markdown(g_name_display, version=2)}\n"
+                msg += f"  *Group ID:* `{g_id}`\n"
+                msg += f"  *Deletion:* `{deletion_status}`\n\n"
+        else:
+            msg += "⚠️ No groups registered.\n\n"
+
+        msg += "*Bypassed Users:*\n"
+        if bypass_users:
+            for (b_id,) in bypass_users:
+                msg += f"• *User ID:* `{b_id}`\n"
+        else:
+            msg += "⚠️ No users have bypassed message deletion.\n"
+
+        try:
+            # Telegram has a message length limit (4096 characters)
+            if len(msg) > 4000:
+                for i in range(0, len(msg), 4000):
+                    chunk = msg[i:i+4000]
+                    await update.message.reply_text(
+                        chunk,
+                        parse_mode='MarkdownV2'
+                    )
+            else:
+                await update.message.reply_text(
+                    msg,
+                    parse_mode='MarkdownV2'
+                )
+            logger.info("Displayed bot information.")
+        except Exception as e:
+            logger.error(f"Error sending /info information: {e}")
+            message = escape_markdown("⚠️ An error occurred while sending the information.", version=2)
+            await update.message.reply_text(
+                message,
+                parse_mode='MarkdownV2'
+            )
+    except Exception as e:
+        logger.error(f"Error processing /info command: {e}")
+        message = escape_markdown("⚠️ Failed to retrieve information. Please try again later.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+
+# ------------------- Help Command -------------------
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /help command to display available commands.
+    """
+    user = update.effective_user
+    logger.debug(f"/help command called by user {user.id}, ALLOWED_USER_ID={ALLOWED_USER_ID}")
+    if user.id != ALLOWED_USER_ID or update.effective_chat.type != ChatType.PRIVATE:
+        return  # Only respond to authorized user in private chat
+    help_text = """*Available Commands:*
+• `/start` - Check if bot is running
+• `/group_add <group_id>` - Register a group (use the exact chat_id of the group)
+• `/rmove_group <group_id>` - Remove a registered group
+• `/bypass <user_id>` - Add a user to bypass warnings
+• `/unbypass <user_id>` - Remove a user from bypass warnings
+• `/group_id` - Retrieve the current group or your user ID
+• `/show` - Show all groups and their deletion status
+• `/info` - Show current bot configuration
+• `/help` - Show this help
+• `/list` - Comprehensive overview of groups and bypassed users
+• `/be_sad <group_id>` - Enable automatic deletion of Arabic messages in a group
+• `/be_happy <group_id>` - Disable automatic deletion of Arabic messages in a group
+"""
+    try:
+        # Escape special characters for MarkdownV2
+        help_text_esc = escape_markdown(help_text, version=2)
+        await update.message.reply_text(
+            help_text_esc,
+            parse_mode='MarkdownV2'
+        )
+        logger.info("Displayed help information to user.")
+    except Exception as e:
+        logger.error(f"Error sending help information: {e}")
+        message = escape_markdown("⚠️ An error occurred while sending the help information.", version=2)
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2'
+        )
+
 # ------------------- Error Handler -------------------
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -837,12 +1177,11 @@ def main():
     application.add_handler(CommandHandler("unbypass", unbypass_cmd))
     application.add_handler(CommandHandler("group_id", group_id_cmd))
     application.add_handler(CommandHandler("show", show_groups_cmd))
-    application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("info", info_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
-
-    # Register delete module handlers
-    delete.init_delete_module(application)
+    application.add_handler(CommandHandler("be_sad", be_sad_cmd))
+    application.add_handler(CommandHandler("be_happy", be_happy_cmd))
 
     # Handle private messages for setting group name
     application.add_handler(MessageHandler(
@@ -850,8 +1189,11 @@ def main():
         handle_private_message_for_group_name
     ))
 
-    # Handle group messages for issuing warnings (removed as warnings are no longer tracked)
-    # If you still need to process messages for deletion, it's handled in delete.py
+    # Handle group messages for deleting Arabic messages
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_arabic_messages
+    ))
 
     # Register error handler
     application.add_error_handler(error_handler)
