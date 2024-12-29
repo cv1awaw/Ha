@@ -6,8 +6,9 @@ import sqlite3
 import logging
 import html
 import fcntl
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
+import asyncio
 from telegram import Update, Message
 from telegram.constants import ChatType
 from telegram.ext import (
@@ -29,6 +30,9 @@ ALLOWED_USER_ID = 6177929931  # Replace with your actual authorized user ID
 
 # Define the lock file path
 LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
+
+# Define the timeframe (in seconds) to delete messages after user removal
+MESSAGE_DELETE_TIMEFRAME = 10  # seconds
 
 # ------------------- Logging Configuration -------------------
 
@@ -284,6 +288,12 @@ def is_deletion_enabled(group_id):
     except Exception as e:
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
+
+# ------------------- Flag for Message Deletion -------------------
+
+# Dictionary to keep track of groups where messages should be deleted after removal
+# Format: {group_id: expiration_time}
+delete_all_messages_after_removal = {}
 
 # ------------------- Command Handler Functions -------------------
 
@@ -962,9 +972,16 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error removing user {target_user_id} from group {group_id}: {e}")
         return
 
+    # Set flag to delete any messages sent to the group within MESSAGE_DELETE_TIMEFRAME seconds
+    delete_all_messages_after_removal[group_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
+    logger.info(f"Set message deletion flag for group {group_id} for {MESSAGE_DELETE_TIMEFRAME} seconds.")
+
+    # Schedule the removal of the flag after MESSAGE_DELETE_TIMEFRAME seconds
+    asyncio.create_task(remove_deletion_flag_after_timeout(group_id))
+
     # Send confirmation to the authorized user privately
     confirmation_message = escape_markdown(
-        f"✅ User `{target_user_id}` has been removed from group `{group_id}`.",
+        f"✅ User `{target_user_id}` has been removed from group `{group_id}`.\nAny messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
         version=2
     )
     try:
@@ -976,6 +993,18 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id}.")
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
+
+async def remove_deletion_flag_after_timeout(group_id):
+    """
+    Remove the message deletion flag for a group after MESSAGE_DELETE_TIMEFRAME seconds.
+    """
+    try:
+        await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
+        if group_id in delete_all_messages_after_removal:
+            del delete_all_messages_after_removal[group_id]
+            logger.info(f"Removed message deletion flag for group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error removing deletion flag for group {group_id}: {e}")
 
 # ------------------- Existing Deletion Control Commands -------------------
 
@@ -1166,6 +1195,28 @@ async def delete_system_messages(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logger.error(f"Failed to delete system message: {e}")
 
+# ------------------- New Message Handler: delete_any_messages -------------------
+
+async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Delete any message sent to the group if the deletion flag is active.
+    This includes messages from users and system messages.
+    """
+    message = update.message
+    if not message:
+        return
+
+    chat = message.chat
+    group_id = chat.id
+
+    # Check if the group is flagged for message deletion
+    if group_id in delete_all_messages_after_removal:
+        try:
+            await message.delete()
+            logger.info(f"Deleted message in group {group_id}: {message.text or 'Non-text message.'}")
+        except Exception as e:
+            logger.error(f"Failed to delete message in group {group_id}: {e}")
+
 # ------------------- Utility Function -------------------
 
 def is_arabic(text):
@@ -1228,6 +1279,12 @@ def main():
     application.add_handler(MessageHandler(
         filters.StatusUpdate.LEFT_CHAT_MEMBER & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_system_messages
+    ))
+
+    # Register the new any message deletion handler
+    application.add_handler(MessageHandler(
+        filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_any_messages
     ))
 
     # Handle private messages for setting group name
