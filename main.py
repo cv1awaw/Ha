@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import re
 import asyncio
 from telegram import Update, ChatMember  # Removed ChatMemberStatus from here
-from telegram.constants import ChatMemberStatus  # Added ChatMemberStatus from telegram.constants
+from telegram.constants import ChatMemberStatus, ChatType  # Added ChatMemberStatus and ChatType from telegram.constants
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
