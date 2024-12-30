@@ -1451,10 +1451,6 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
-# ------------------- Existing /info and /help Commands -------------------
-
-# Note: These commands are already handled above.
-
 # ------------------- Message Handler Functions -------------------
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
