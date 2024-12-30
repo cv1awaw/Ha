@@ -9,8 +9,8 @@ import fcntl
 from datetime import datetime, timedelta
 import re
 import asyncio
-from telegram import Update, ChatMember, ChatMemberStatus
-from telegram.constants import ChatType
+from telegram import Update, ChatMember  # Removed ChatMemberStatus from here
+from telegram.constants import ChatMemberStatus  # Added ChatMemberStatus from telegram.constants
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -438,7 +438,7 @@ async def handle_private_message_for_group_name(update: Update, context: Context
                 escaped_group_name = escape_markdown(group_name, version=2)
                 set_group_name(g_id, group_name)
                 confirmation_message = escape_markdown(
-                    f"✅ Group name for `{g_id}` set to: *{escaped_group_name}*",
+                    f"✅ Group `{g_id}` name set to: *{escaped_group_name}*",
                     version=2
                 )
                 await context.bot.send_message(
@@ -1778,6 +1778,10 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"User {uid} has been removed from group {group_id} via /check command.")
             except Exception as e:
                 logger.error(f"Failed to remove user {uid} from group {group_id}: {e}")
+
+# ------------------- Existing Deletion Control Commands -------------------
+
+# Note: These commands are already handled above.
 
 # ------------------- Message Handler Functions -------------------
 
