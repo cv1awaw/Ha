@@ -9,8 +9,8 @@ import fcntl
 from datetime import datetime, timedelta
 import re
 import asyncio
-from telegram import Update, ChatMember  # Removed ChatMemberStatus from here
-from telegram.constants import ChatMemberStatus, ChatType  # Added ChatMemberStatus and ChatType from telegram.constants
+from telegram import Update, ChatMember
+from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -385,16 +385,24 @@ def add_user_to_permissions_removed_users(group_id, user_id, removal_reason="Rem
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
+        # Check if the user is already in the removed_users list for the group
+        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        if c.fetchone():
+            logger.warning(f"User {user_id} is already in 'removed_users' for group {group_id}.")
+            conn.close()
+            return False  # Indicate that the user was already in the list
+
         c.execute('''
-            INSERT OR IGNORE INTO removed_users (group_id, user_id, removal_reason)
+            INSERT INTO removed_users (group_id, user_id, removal_reason)
             VALUES (?, ?, ?)
         ''', (group_id, user_id, removal_reason))
         conn.commit()
         conn.close()
         logger.info(f"User {user_id} added to 'removed_users' table for group {group_id} with reason: {removal_reason}")
+        return True
     except Exception as e:
         logger.error(f"Error adding user {user_id} to 'removed_users' table for group {group_id}: {e}")
-        raise
+        return False
 
 def list_removed_users():
     """
@@ -662,19 +670,35 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.warning(f"Non-integer user_id provided to /bypass by user {user.id}")
         return
+
+    # Check if the user is already in bypass_users
     try:
-        add_bypass_user(target_user_id)
-        logger.debug(f"Added bypass user {target_user_id} to database.")
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (target_user_id,))
+        if c.fetchone():
+            conn.close()
+            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the bypass list.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"Attempted to add already bypassed user {target_user_id} by user {user.id}")
+            return
+        conn.close()
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to add bypass user. Please try again later.", version=2)
+        message = escape_markdown("⚠️ Failed to check bypass status. Please try again later.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
             text=message,
             parse_mode='MarkdownV2'
         )
-        logger.error(f"Error adding bypass user {target_user_id} by user {user.id}: {e}")
+        logger.error(f"Error checking bypass status for user {target_user_id}: {e}")
         return
+
     try:
+        add_bypass_user(target_user_id)
         confirmation_message = escape_markdown(
             f"✅ User `{target_user_id}` has been added to bypass warnings.",
             version=2
@@ -686,7 +710,13 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.info(f"Added user {target_user_id} to bypass list by user {user.id}")
     except Exception as e:
-        logger.error(f"Error sending reply for /bypass command: {e}")
+        message = escape_markdown("⚠️ Failed to add bypass user. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error adding bypass user {target_user_id} by user {user.id}: {e}")
 
 async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -718,6 +748,7 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.warning(f"Non-integer user_id provided to /unbypass by user {user.id}")
         return
+
     try:
         if remove_bypass_user(target_user_id):
             confirmation_message = escape_markdown(
@@ -1075,18 +1106,54 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
         return
 
+    # Check if the user is already in the removed_users list for the group
     try:
-        add_user_to_permissions_removed_users(group_id, target_user_id, removal_reason="Manually added via /add_removed_user")
-        confirmation_message = escape_markdown(
-            f"✅ User `{target_user_id}` has been added to the 'Removed Users' list for group `{group_id}`.",
-            version=2
-        )
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
+        if c.fetchone():
+            conn.close()
+            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the 'Removed Users' list for group `{group_id}`.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"Attempted to add already removed user {target_user_id} to group {group_id} by user {user.id}")
+            return
+        conn.close()
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to check removed users list. Please try again later.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
-            text=confirmation_message,
+            text=message,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Added user {target_user_id} to 'Removed Users' list for group {group_id} by user {user.id}")
+        logger.error(f"Error checking removed users for group {group_id}: {e}")
+        return
+
+    try:
+        added = add_user_to_permissions_removed_users(group_id, target_user_id, removal_reason="Manually added via /add_removed_user")
+        if added:
+            confirmation_message = escape_markdown(
+                f"✅ User `{target_user_id}` has been added to the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=confirmation_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"Added user {target_user_id} to 'Removed Users' list for group {group_id} by user {user.id}")
+        else:
+            # This case is already handled above, but included for completeness
+            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the 'Removed Users' list for group `{group_id}`.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"Attempted to add already removed user {target_user_id} to group {group_id} by user {user.id}")
     except Exception as e:
         message = escape_markdown("⚠️ Failed to add user to 'Removed Users'. Please try again later.", version=2)
         await context.bot.send_message(
