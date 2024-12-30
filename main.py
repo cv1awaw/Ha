@@ -88,32 +88,31 @@ def init_permissions_db():
     Initialize the permissions and removed_users tables.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        
-        # Create permissions table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS permissions (
-                user_id INTEGER PRIMARY KEY,
-                role TEXT NOT NULL
-            )
-        ''')
-        
-        # Create removed_users table with group_id
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS removed_users (
-                group_id INTEGER,
-                user_id INTEGER,
-                removal_reason TEXT,
-                removal_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, user_id),
-                FOREIGN KEY (group_id) REFERENCES groups(group_id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        logger.info("Permissions and Removed Users tables initialized successfully.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            
+            # Create permissions table
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS permissions (
+                    user_id INTEGER PRIMARY KEY,
+                    role TEXT NOT NULL
+                )
+            ''')
+            
+            # Create removed_users table with group_id
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS removed_users (
+                    group_id INTEGER,
+                    user_id INTEGER,
+                    removal_reason TEXT,
+                    removal_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_id),
+                    FOREIGN KEY (group_id) REFERENCES groups(group_id)
+                )
+            ''')
+            
+            conn.commit()
+            logger.info("Permissions and Removed Users tables initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize permissions database: {e}")
         raise
@@ -123,49 +122,48 @@ def init_db():
     Initialize the SQLite database and create necessary tables if they don't exist.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
 
-        # Create groups table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS groups (
-                group_id INTEGER PRIMARY KEY,
-                group_name TEXT
-            )
-        ''')
+            # Create groups table
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS groups (
+                    group_id INTEGER PRIMARY KEY,
+                    group_name TEXT
+                )
+            ''')
 
-        # Create bypass_users table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS bypass_users (
-                user_id INTEGER PRIMARY KEY
-            )
-        ''')
+            # Create bypass_users table
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS bypass_users (
+                    user_id INTEGER PRIMARY KEY
+                )
+            ''')
 
-        # Create deletion_settings table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS deletion_settings (
-                group_id INTEGER PRIMARY KEY,
-                enabled BOOLEAN NOT NULL DEFAULT 0,
-                FOREIGN KEY(group_id) REFERENCES groups(group_id)
-            )
-        ''')
+            # Create deletion_settings table
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS deletion_settings (
+                    group_id INTEGER PRIMARY KEY,
+                    enabled BOOLEAN NOT NULL DEFAULT 0,
+                    FOREIGN KEY(group_id) REFERENCES groups(group_id)
+                )
+            ''')
 
-        # Create users table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                last_name TEXT,
-                username TEXT
-            )
-        ''')
+            # Create users table
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    first_name TEXT,
+                    last_name TEXT,
+                    username TEXT
+                )
+            ''')
 
-        conn.commit()
-        conn.close()
-        logger.info("Database initialized successfully.")
-        
-        # Initialize permissions-related tables
-        init_permissions_db()
+            conn.commit()
+            logger.info("Database initialized successfully.")
+            
+            # Initialize permissions-related tables
+            init_permissions_db()
     except Exception as e:
         logger.error(f"Failed to initialize the database: {e}")
         raise
@@ -177,12 +175,11 @@ def add_group(group_id):
     Add a group by its chat ID.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)', (group_id, None))
-        conn.commit()
-        conn.close()
-        logger.info(f"Added group {group_id} to database with no name.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)', (group_id, None))
+            conn.commit()
+            logger.info(f"Added group {group_id} to database with no name.")
     except Exception as e:
         logger.error(f"Error adding group {group_id}: {e}")
         raise
@@ -192,12 +189,11 @@ def set_group_name(g_id, group_name):
     Set the name of a group.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('UPDATE groups SET group_name = ? WHERE group_id = ?', (group_name, g_id))
-        conn.commit()
-        conn.close()
-        logger.info(f"Set name for group {g_id}: {group_name}")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('UPDATE groups SET group_name = ? WHERE group_id = ?', (group_name, g_id))
+            conn.commit()
+            logger.info(f"Set name for group {g_id}: {group_name}")
     except Exception as e:
         logger.error(f"Error setting group name for {g_id}: {e}")
         raise
@@ -207,13 +203,12 @@ def group_exists(group_id):
     Check if a group exists in the database.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT 1 FROM groups WHERE group_id = ?', (group_id,))
-        exists = c.fetchone() is not None
-        conn.close()
-        logger.debug(f"Checked existence of group {group_id}: {exists}")
-        return exists
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('SELECT 1 FROM groups WHERE group_id = ?', (group_id,))
+            exists = c.fetchone() is not None
+            logger.debug(f"Checked existence of group {group_id}: {exists}")
+            return exists
     except Exception as e:
         logger.error(f"Error checking group existence for {group_id}: {e}")
         return False
@@ -223,13 +218,12 @@ def is_bypass_user(user_id):
     Check if a user is in the bypass list.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (user_id,))
-        res = c.fetchone() is not None
-        conn.close()
-        logger.debug(f"Checked if user {user_id} is bypassed: {res}")
-        return res
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (user_id,))
+            res = c.fetchone() is not None
+            logger.debug(f"Checked if user {user_id} is bypassed: {res}")
+            return res
     except Exception as e:
         logger.error(f"Error checking bypass status for user {user_id}: {e}")
         return False
@@ -239,12 +233,11 @@ def add_bypass_user(user_id):
     Add a user to the bypass list.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('INSERT OR IGNORE INTO bypass_users (user_id) VALUES (?)', (user_id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"Added user {user_id} to bypass list.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('INSERT OR IGNORE INTO bypass_users (user_id) VALUES (?)', (user_id,))
+            conn.commit()
+            logger.info(f"Added user {user_id} to bypass list.")
     except Exception as e:
         logger.error(f"Error adding user {user_id} to bypass list: {e}")
         raise
@@ -255,18 +248,17 @@ def remove_bypass_user(user_id):
     Returns True if a record was deleted, False otherwise.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('DELETE FROM bypass_users WHERE user_id = ?', (user_id,))
-        changes = c.rowcount
-        conn.commit()
-        conn.close()
-        if changes > 0:
-            logger.info(f"Removed user {user_id} from bypass list.")
-            return True
-        else:
-            logger.warning(f"User {user_id} not found in bypass list.")
-            return False
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('DELETE FROM bypass_users WHERE user_id = ?', (user_id,))
+            changes = c.rowcount
+            conn.commit()
+            if changes > 0:
+                logger.info(f"Removed user {user_id} from bypass list.")
+                return True
+            else:
+                logger.warning(f"User {user_id} not found in bypass list.")
+                return False
     except Exception as e:
         logger.error(f"Error removing user {user_id} from bypass list: {e}")
         return False
@@ -276,16 +268,15 @@ def enable_deletion(group_id):
     Enable message deletion for a specific group.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 1)
-            ON CONFLICT(group_id) DO UPDATE SET enabled=1
-        ''', (group_id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"Enabled message deletion for group {group_id}.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO deletion_settings (group_id, enabled)
+                VALUES (?, 1)
+                ON CONFLICT(group_id) DO UPDATE SET enabled=1
+            ''', (group_id,))
+            conn.commit()
+            logger.info(f"Enabled message deletion for group {group_id}.")
     except Exception as e:
         logger.error(f"Error enabling deletion for group {group_id}: {e}")
         raise
@@ -295,16 +286,15 @@ def disable_deletion(group_id):
     Disable message deletion for a specific group.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 0)
-            ON CONFLICT(group_id) DO UPDATE SET enabled=0
-        ''', (group_id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"Disabled message deletion for group {group_id}.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO deletion_settings (group_id, enabled)
+                VALUES (?, 0)
+                ON CONFLICT(group_id) DO UPDATE SET enabled=0
+            ''', (group_id,))
+            conn.commit()
+            logger.info(f"Disabled message deletion for group {group_id}.")
     except Exception as e:
         logger.error(f"Error disabling deletion for group {group_id}: {e}")
         raise
@@ -314,14 +304,13 @@ def is_deletion_enabled(group_id):
     Check if message deletion is enabled for a specific group.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (group_id,))
-        row = c.fetchone()
-        conn.close()
-        enabled = row[0] if row else False
-        logger.debug(f"Deletion enabled for group {group_id}: {enabled}")
-        return bool(enabled)
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (group_id,))
+            row = c.fetchone()
+            enabled = row[0] if row else False
+            logger.debug(f"Deletion enabled for group {group_id}: {enabled}")
+            return bool(enabled)
     except Exception as e:
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
@@ -331,16 +320,17 @@ def remove_user_from_permissions_removed_users(group_id, user_id):
     Remove a user from the removed_users table in the permissions system for a specific group.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-        changes = c.rowcount
-        conn.commit()
-        conn.close()
-        if changes > 0:
-            logger.info(f"User {user_id} removed from 'removed_users' table for group {group_id}.")
-        else:
-            logger.warning(f"User {user_id} not found in 'removed_users' table for group {group_id}.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+            changes = c.rowcount
+            conn.commit()
+            if changes > 0:
+                logger.info(f"User {user_id} removed from 'removed_users' table for group {group_id}.")
+                return True
+            else:
+                logger.warning(f"User {user_id} not found in 'removed_users' table for group {group_id}.")
+                return False
     except Exception as e:
         logger.error(f"Error removing user {user_id} from 'removed_users' table for group {group_id}: {e}")
         raise
@@ -350,12 +340,11 @@ def revoke_user_permissions(user_id):
     Revoke all permissions for a user by setting their role to 'removed'.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('UPDATE permissions SET role = ? WHERE user_id = ?', ('removed', user_id))
-        conn.commit()
-        conn.close()
-        logger.info(f"Permissions revoked for user {user_id}. Role set to 'removed'.")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('UPDATE permissions SET role = ? WHERE user_id = ?', ('removed', user_id))
+            conn.commit()
+            logger.info(f"Permissions revoked for user {user_id}. Role set to 'removed'.")
     except Exception as e:
         logger.error(f"Error revoking permissions for user {user_id}: {e}")
         raise
@@ -365,15 +354,14 @@ def add_user_to_permissions_removed_users(group_id, user_id, removal_reason="Rem
     Add a user to the removed_users table in the permissions system with group association.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            INSERT OR IGNORE INTO removed_users (group_id, user_id, removal_reason)
-            VALUES (?, ?, ?)
-        ''', (group_id, user_id, removal_reason))
-        conn.commit()
-        conn.close()
-        logger.info(f"User {user_id} added to 'removed_users' table for group {group_id} with reason: {removal_reason}")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('''
+                INSERT OR IGNORE INTO removed_users (group_id, user_id, removal_reason)
+                VALUES (?, ?, ?)
+            ''', (group_id, user_id, removal_reason))
+            conn.commit()
+            logger.info(f"User {user_id} added to 'removed_users' table for group {group_id} with reason: {removal_reason}")
     except Exception as e:
         logger.error(f"Error adding user {user_id} to 'removed_users' table for group {group_id}: {e}")
         raise
@@ -384,13 +372,12 @@ def list_removed_users():
     Returns a list of tuples containing group_id, user_id, removal_reason, and removal_time.
     """
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
-        users = c.fetchall()
-        conn.close()
-        logger.info("Fetched list of removed users with group associations.")
-        return users
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
+            users = c.fetchall()
+            logger.info("Fetched list of removed users with group associations.")
+            return users
     except Exception as e:
         logger.error(f"Error fetching removed users: {e}")
         return []
@@ -577,34 +564,37 @@ async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
-        changes = c.rowcount
-        conn.commit()
-        conn.close()
-        if changes > 0:
-            confirm_message = escape_markdown(
-                f"✅ Removed group `{group_id}` from registration.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=confirm_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Removed group {group_id} by user {user.id}")
-        else:
-            warning_message = escape_markdown(
-                f"⚠️ Group `{group_id}` not found.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=warning_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"Attempted to remove non-existent group {group_id} by user {user.id}")
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
+            changes = c.rowcount
+            conn.commit()
+            if changes > 0:
+                # Also remove related entries from deletion_settings and removed_users
+                c.execute('DELETE FROM deletion_settings WHERE group_id = ?', (group_id,))
+                c.execute('DELETE FROM removed_users WHERE group_id = ?', (group_id,))
+                conn.commit()
+                confirm_message = escape_markdown(
+                    f"✅ Removed group `{group_id}` from registration.",
+                    version=2
+                )
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=confirm_message,
+                    parse_mode='MarkdownV2'
+                )
+                logger.info(f"Removed group {group_id} and related entries by user {user.id}")
+            else:
+                warning_message = escape_markdown(
+                    f"⚠️ Group `{group_id}` not found.",
+                    version=2
+                )
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=warning_message,
+                    parse_mode='MarkdownV2'
+                )
+                logger.warning(f"Attempted to remove non-existent group {group_id} by user {user.id}")
     except Exception as e:
         message = escape_markdown("⚠️ Failed to remove group. Please try again later.", version=2)
         await context.bot.send_message(
@@ -741,11 +731,10 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id != ALLOWED_USER_ID:
         return  # Only respond to authorized user
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT group_id, group_name FROM groups')
-        groups_data = c.fetchall()
-        conn.close()
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
+            c.execute('SELECT group_id, group_name FROM groups')
+            groups_data = c.fetchall()
 
         if not groups_data:
             message = escape_markdown("⚠️ No groups added.", version=2)
@@ -765,11 +754,10 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Fetch deletion settings
             try:
-                conn = sqlite3.connect(DATABASE)
-                c = conn.cursor()
-                c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (g_id,))
-                row = c.fetchone()
-                conn.close()
+                with sqlite3.connect(DATABASE) as conn:
+                    c = conn.cursor()
+                    c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (g_id,))
+                    row = c.fetchone()
                 deletion_status = "Enabled" if row and row[0] else "Disabled"
                 msg += f"*Deletion Status:* `{deletion_status}`\n"
             except Exception as e:
@@ -778,17 +766,16 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Fetch bypassed users
             try:
-                conn = sqlite3.connect(DATABASE)
-                c = conn.cursor()
-                c.execute('''
-                    SELECT u.user_id, u.first_name, u.last_name, u.username
-                    FROM users u
-                    WHERE u.user_id IN (
-                        SELECT user_id FROM bypass_users
-                    )
-                ''')
-                bypass_users = c.fetchall()
-                conn.close()
+                with sqlite3.connect(DATABASE) as conn:
+                    c = conn.cursor()
+                    c.execute('''
+                        SELECT u.user_id, u.first_name, u.last_name, u.username
+                        FROM users u
+                        WHERE u.user_id IN (
+                            SELECT user_id FROM bypass_users
+                        )
+                    ''')
+                    bypass_users = c.fetchall()
                 if bypass_users:
                     msg += "*Bypassed Users:*\n"
                     for b_id, b_first, b_last, b_username in bypass_users:
@@ -832,14 +819,6 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=message,
                 parse_mode='MarkdownV2'
             )
-    except Exception as e:
-        logger.error(f"Error processing /show command: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve list information. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
 
 async def group_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -937,24 +916,22 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # Only respond to authorized user
 
     try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
+        with sqlite3.connect(DATABASE) as conn:
+            c = conn.cursor()
 
-        # Fetch all groups and their deletion settings
-        c.execute('''
-            SELECT g.group_id, g.group_name, ds.enabled
-            FROM groups g
-            LEFT JOIN deletion_settings ds ON g.group_id = ds.group_id
-        ''')
-        groups = c.fetchall()
+            # Fetch all groups and their deletion settings
+            c.execute('''
+                SELECT g.group_id, g.group_name, ds.enabled
+                FROM groups g
+                LEFT JOIN deletion_settings ds ON g.group_id = ds.group_id
+            ''')
+            groups = c.fetchall()
 
-        # Fetch all bypassed users
-        c.execute('''
-            SELECT user_id FROM bypass_users
-        ''')
-        bypass_users = c.fetchall()
-
-        conn.close()
+            # Fetch all bypassed users
+            c.execute('''
+                SELECT user_id FROM bypass_users
+            ''')
+            bypass_users = c.fetchall()
 
         msg = "*Bot Information:*\n\n"
         msg += "*Registered Groups:*\n"
@@ -1150,6 +1127,8 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode='MarkdownV2'
         )
 
+# ------------------- New Command: /rmove_user_removed -------------------
+
 async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle the /rmove_user_removed command to remove a user from the "Removed Users" list for a specific group.
@@ -1185,18 +1164,41 @@ async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Non-integer group_id or user_id provided to /rmove_user_removed by user {user.id}")
         return
 
-    try:
-        remove_user_from_permissions_removed_users(group_id, target_user_id)
-        confirmation_message = escape_markdown(
-            f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
-            version=2
-        )
+    # Validate group existence
+    if not group_exists(group_id):
+        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
-            text=confirmation_message,
+            text=message,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Removed user {target_user_id} from 'Removed Users' list for group {group_id} by user {user.id}")
+        logger.warning(f"Attempted to remove user from unregistered group {group_id} by user {user.id}")
+        return
+
+    try:
+        removed = remove_user_from_permissions_removed_users(group_id, target_user_id)
+        if removed:
+            confirmation_message = escape_markdown(
+                f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=confirmation_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"Removed user {target_user_id} from 'Removed Users' list for group {group_id} by user {user.id}")
+        else:
+            warning_message = escape_markdown(
+                f"⚠️ User `{target_user_id}` was not found in the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=warning_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"User {target_user_id} not found in 'Removed Users' for group {group_id} by user {user.id}")
     except Exception as e:
         message = escape_markdown("⚠️ Failed to remove user from 'Removed Users'. Please try again later.", version=2)
         await context.bot.send_message(
@@ -1384,8 +1386,11 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Remove the user from the permissions system's removed_users table
     try:
-        remove_user_from_permissions_removed_users(group_id, target_user_id)
-        logger.info(f"User {target_user_id} removed from 'Removed Users' in Permissions for group {group_id} by user {user.id}")
+        removed = remove_user_from_permissions_removed_users(group_id, target_user_id)
+        if removed:
+            logger.info(f"User {target_user_id} removed from 'Removed Users' in Permissions for group {group_id} by user {user.id}")
+        else:
+            logger.warning(f"User {target_user_id} was not found in 'Removed Users' for group {group_id} by user {user.id}")
     except Exception as e:
         message = escape_markdown("⚠️ Failed to update permissions system. Please try again later.", version=2)
         await context.bot.send_message(
@@ -1446,147 +1451,6 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
-# ------------------- New Commands: /add_removed_user & /list_removed_users -------------------
-
-async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /add_removed_user command to add a user to the "Removed Users" list for a specific group.
-    Usage: /add_removed_user <group_id> <user_id>
-    """
-    user = update.effective_user
-    logger.debug(f"/add_removed_user command called by user {user.id} with args: {context.args}")
-    
-    if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-
-    if len(context.args) != 2:
-        message = escape_markdown("⚠️ Usage: `/add_removed_user <group_id> <user_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /add_removed_user by user {user.id}")
-        return
-
-    try:
-        group_id = int(context.args[0])
-        target_user_id = int(context.args[1])
-        logger.debug(f"Parsed group_id: {group_id}, user_id: {target_user_id}")
-    except ValueError:
-        message = escape_markdown("⚠️ Both `group_id` and `user_id` must be integers.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id or user_id provided to /add_removed_user by user {user.id}")
-        return
-
-    if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
-        return
-
-    try:
-        add_user_to_permissions_removed_users(group_id, target_user_id, removal_reason="Manually added via /add_removed_user")
-        confirmation_message = escape_markdown(
-            f"✅ User `{target_user_id}` has been added to the 'Removed Users' list for group `{group_id}`.",
-            version=2
-        )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"Added user {target_user_id} to 'Removed Users' list for group {group_id} by user {user.id}")
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to add user to 'Removed Users'. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error adding user {target_user_id} to 'Removed Users' for group {group_id}: {e}")
-
-async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /list_removed_users command to list all users in the "Removed Users" list per group.
-    Usage: /list_removed_users
-    """
-    user = update.effective_user
-    logger.debug(f"/list_removed_users command called by user {user.id}")
-    
-    if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-
-    try:
-        removed_users = list_removed_users()
-        if not removed_users:
-            message = escape_markdown("⚠️ The 'Removed Users' list is empty.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info("Displayed empty 'Removed Users' list.")
-            return
-
-        # Organize removed users by group
-        groups = {}
-        for group_id, user_id, reason, time in removed_users:
-            if group_id not in groups:
-                groups[group_id] = []
-            groups[group_id].append((user_id, reason, time))
-
-        msg = "*Removed Users:*\n\n"
-        for group_id, users in groups.items():
-            msg += f"*Group ID:* `{group_id}`\n"
-            for user_id, reason, time in users:
-                msg += f"• *User ID:* `{user_id}`\n"
-                msg += f"  *Reason:* {escape_markdown(reason, version=2)}\n"
-                msg += f"  *Removed At:* {time}\n"
-            msg += "\n"
-
-        try:
-            # Telegram has a message length limit (4096 characters)
-            if len(msg) > 4000:
-                for i in range(0, len(msg), 4000):
-                    chunk = msg[i:i+4000]
-                    await context.bot.send_message(
-                        chat_id=user.id,
-                        text=chunk,
-                        parse_mode='MarkdownV2'
-                    )
-            else:
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=msg,
-                    parse_mode='MarkdownV2'
-                )
-            logger.info("Displayed 'Removed Users' list.")
-        except Exception as e:
-            logger.error(f"Error sending 'Removed Users' list: {e}")
-            message = escape_markdown("⚠️ An error occurred while sending the list.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-    except Exception as e:
-        logger.error(f"Error processing /list_removed_users command: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve 'Removed Users' list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-
 # ------------------- New Command: /rmove_user_removed -------------------
 
 async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1624,18 +1488,41 @@ async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Non-integer group_id or user_id provided to /rmove_user_removed by user {user.id}")
         return
 
-    try:
-        remove_user_from_permissions_removed_users(group_id, target_user_id)
-        confirmation_message = escape_markdown(
-            f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
-            version=2
-        )
+    # Validate group existence
+    if not group_exists(group_id):
+        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
-            text=confirmation_message,
+            text=message,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Removed user {target_user_id} from 'Removed Users' list for group {group_id} by user {user.id}")
+        logger.warning(f"Attempted to remove user from unregistered group {group_id} by user {user.id}")
+        return
+
+    try:
+        removed = remove_user_from_permissions_removed_users(group_id, target_user_id)
+        if removed:
+            confirmation_message = escape_markdown(
+                f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=confirmation_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"Removed user {target_user_id} from 'Removed Users' list for group {group_id} by user {user.id}")
+        else:
+            warning_message = escape_markdown(
+                f"⚠️ User `{target_user_id}` was not found in the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=warning_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"User {target_user_id} not found in 'Removed Users' for group {group_id} by user {user.id}")
     except Exception as e:
         message = escape_markdown("⚠️ Failed to remove user from 'Removed Users'. Please try again later.", version=2)
         await context.bot.send_message(
@@ -1715,57 +1602,6 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.info(f"Deleted message in group {group_id}: {message.text or 'Non-text message.'}")
         except Exception as e:
             logger.error(f"Failed to delete message in group {group_id}: {e}")
-
-async def handle_private_message_for_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle private messages sent by the authorized user to set group names.
-    """
-    if update.effective_chat.type != ChatType.PRIVATE:
-        return
-    message = update.message
-    user = message.from_user
-    logger.debug(f"Received private message from user {user.id}: {message.text}")
-    if user.id == ALLOWED_USER_ID and user.id in pending_group_names:
-        g_id = pending_group_names.pop(user.id)
-        group_name = message.text.strip()
-        if group_name:
-            try:
-                escaped_group_name = escape_markdown(group_name, version=2)
-                set_group_name(g_id, group_name)
-                confirmation_message = escape_markdown(
-                    f"✅ Group name for `{g_id}` set to: *{escaped_group_name}*",
-                    version=2
-                )
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=confirmation_message,
-                    parse_mode='MarkdownV2'
-                )
-                logger.info(f"Group name for {g_id} set to {group_name} by user {user.id}")
-            except Exception as e:
-                error_message = escape_markdown("⚠️ Failed to set group name. Please try `/group_add` again.", version=2)
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=error_message,
-                    parse_mode='MarkdownV2'
-                )
-                logger.error(f"Error setting group name for {g_id} by user {user.id}: {e}")
-        else:
-            warning_message = escape_markdown("⚠️ Group name cannot be empty. Please try `/group_add` again.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=warning_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"Empty group name received from user {user.id} for group {g_id}")
-    else:
-        warning_message = escape_markdown("⚠️ No pending group to set name for.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=warning_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Received group name from user {user.id} with no pending group.")
 
 # ------------------- Utility Function -------------------
 
