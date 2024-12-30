@@ -389,7 +389,7 @@ def list_removed_users():
         c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
         users = c.fetchall()
         conn.close()
-        logger.info("Fetched list of removed users with associated groups.")
+        logger.info("Fetched list of removed users with group associations.")
         return users
     except Exception as e:
         logger.error(f"Error fetching removed users: {e}")
@@ -1047,13 +1047,13 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered.", version=2)
+        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
             text=message,
             parse_mode='MarkdownV2'
         )
-        logger.warning(f"Attempted to add removed user to non-existent group {group_id} by user {user.id}")
+        logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
         return
 
     try:
@@ -1107,7 +1107,7 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
                 groups[group_id] = []
             groups[group_id].append((user_id, reason, time))
 
-        msg = "*Removed Users by Group:*\n\n"
+        msg = "*Removed Users:*\n\n"
         for group_id, users in groups.items():
             msg += f"*Group ID:* `{group_id}`\n"
             for user_id, reason, time in users:
@@ -1132,7 +1132,7 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
                     text=msg,
                     parse_mode='MarkdownV2'
                 )
-            logger.info("Displayed 'Removed Users' list grouped by group.")
+            logger.info("Displayed 'Removed Users' list.")
         except Exception as e:
             logger.error(f"Error sending 'Removed Users' list: {e}")
             message = escape_markdown("⚠️ An error occurred while sending the list.", version=2)
@@ -1149,14 +1149,6 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
             text=message,
             parse_mode='MarkdownV2'
         )
-
-async def show_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Alias for /list_removed_users command.
-    """
-    await list_removed_users_cmd(update, context)
-
-# ------------------- New Command: /rmove_user_removed -------------------
 
 async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1390,7 +1382,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
         return
 
-    # Remove the user from the permissions system's removed_users table for the specific group
+    # Remove the user from the permissions system's removed_users table
     try:
         remove_user_from_permissions_removed_users(group_id, target_user_id)
         logger.info(f"User {target_user_id} removed from 'Removed Users' in Permissions for group {group_id} by user {user.id}")
@@ -1454,6 +1446,147 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
+# ------------------- New Commands: /add_removed_user & /list_removed_users -------------------
+
+async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /add_removed_user command to add a user to the "Removed Users" list for a specific group.
+    Usage: /add_removed_user <group_id> <user_id>
+    """
+    user = update.effective_user
+    logger.debug(f"/add_removed_user command called by user {user.id} with args: {context.args}")
+    
+    if user.id != ALLOWED_USER_ID:
+        return  # Only respond to authorized user
+
+    if len(context.args) != 2:
+        message = escape_markdown("⚠️ Usage: `/add_removed_user <group_id> <user_id>`", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Incorrect usage of /add_removed_user by user {user.id}")
+        return
+
+    try:
+        group_id = int(context.args[0])
+        target_user_id = int(context.args[1])
+        logger.debug(f"Parsed group_id: {group_id}, user_id: {target_user_id}")
+    except ValueError:
+        message = escape_markdown("⚠️ Both `group_id` and `user_id` must be integers.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Non-integer group_id or user_id provided to /add_removed_user by user {user.id}")
+        return
+
+    if not group_exists(group_id):
+        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
+        return
+
+    try:
+        add_user_to_permissions_removed_users(group_id, target_user_id, removal_reason="Manually added via /add_removed_user")
+        confirmation_message = escape_markdown(
+            f"✅ User `{target_user_id}` has been added to the 'Removed Users' list for group `{group_id}`.",
+            version=2
+        )
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirmation_message,
+            parse_mode='MarkdownV2'
+        )
+        logger.info(f"Added user {target_user_id} to 'Removed Users' list for group {group_id} by user {user.id}")
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to add user to 'Removed Users'. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error adding user {target_user_id} to 'Removed Users' for group {group_id}: {e}")
+
+async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the /list_removed_users command to list all users in the "Removed Users" list per group.
+    Usage: /list_removed_users
+    """
+    user = update.effective_user
+    logger.debug(f"/list_removed_users command called by user {user.id}")
+    
+    if user.id != ALLOWED_USER_ID:
+        return  # Only respond to authorized user
+
+    try:
+        removed_users = list_removed_users()
+        if not removed_users:
+            message = escape_markdown("⚠️ The 'Removed Users' list is empty.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info("Displayed empty 'Removed Users' list.")
+            return
+
+        # Organize removed users by group
+        groups = {}
+        for group_id, user_id, reason, time in removed_users:
+            if group_id not in groups:
+                groups[group_id] = []
+            groups[group_id].append((user_id, reason, time))
+
+        msg = "*Removed Users:*\n\n"
+        for group_id, users in groups.items():
+            msg += f"*Group ID:* `{group_id}`\n"
+            for user_id, reason, time in users:
+                msg += f"• *User ID:* `{user_id}`\n"
+                msg += f"  *Reason:* {escape_markdown(reason, version=2)}\n"
+                msg += f"  *Removed At:* {time}\n"
+            msg += "\n"
+
+        try:
+            # Telegram has a message length limit (4096 characters)
+            if len(msg) > 4000:
+                for i in range(0, len(msg), 4000):
+                    chunk = msg[i:i+4000]
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=chunk,
+                        parse_mode='MarkdownV2'
+                    )
+            else:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=msg,
+                    parse_mode='MarkdownV2'
+                )
+            logger.info("Displayed 'Removed Users' list.")
+        except Exception as e:
+            logger.error(f"Error sending 'Removed Users' list: {e}")
+            message = escape_markdown("⚠️ An error occurred while sending the list.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+    except Exception as e:
+        logger.error(f"Error processing /list_removed_users command: {e}")
+        message = escape_markdown("⚠️ Failed to retrieve 'Removed Users' list. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+
 # ------------------- New Command: /rmove_user_removed -------------------
 
 async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1491,16 +1624,6 @@ async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Non-integer group_id or user_id provided to /rmove_user_removed by user {user.id}")
         return
 
-    if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Attempted to remove removed user from non-existent group {group_id} by user {user.id}")
-        return
-
     try:
         remove_user_from_permissions_removed_users(group_id, target_user_id)
         confirmation_message = escape_markdown(
@@ -1522,125 +1645,9 @@ async def rmove_user_removed_cmd(update: Update, context: ContextTypes.DEFAULT_T
         )
         logger.error(f"Error removing user {target_user_id} from 'Removed Users' for group {group_id}: {e}")
 
-# ------------------- Existing Deletion Control Commands -------------------
+# ------------------- Existing /info and /help Commands -------------------
 
-async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /be_sad command to enable message deletion in a group.
-    Usage: /be_sad <group_id>
-    """
-    user = update.effective_user
-    args = context.args
-    logger.debug(f"/be_sad called by user {user.id} with args: {args}")
-
-    # Check if the user is authorized
-    if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-
-    if len(args) != 1:
-        message = escape_markdown("⚠️ Usage: `/be_sad <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /be_sad by user {user.id}")
-        return
-
-    try:
-        group_id = int(args[0])
-    except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /be_sad by user {user.id}")
-        return
-
-    # Enable deletion
-    try:
-        enable_deletion(group_id)
-    except Exception:
-        message = escape_markdown("⚠️ Failed to enable message deletion. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        return
-
-    # Confirm to the user
-    confirmation_message = escape_markdown(
-        f"✅ Message deletion enabled for group `{group_id}`.",
-        version=2
-    )
-    await context.bot.send_message(
-        chat_id=user.id,
-        text=confirmation_message,
-        parse_mode='MarkdownV2'
-    )
-    logger.info(f"User {user.id} enabled message deletion for group {group_id}.")
-
-async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the /be_happy command to disable message deletion in a group.
-    Usage: /be_happy <group_id>
-    """
-    user = update.effective_user
-    args = context.args
-    logger.debug(f"/be_happy called by user {user.id} with args: {args}")
-
-    # Check if the user is authorized
-    if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-
-    if len(args) != 1:
-        message = escape_markdown("⚠️ Usage: `/be_happy <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /be_happy by user {user.id}")
-        return
-
-    try:
-        group_id = int(args[0])
-    except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /be_happy by user {user.id}")
-        return
-
-    # Disable deletion
-    try:
-        disable_deletion(group_id)
-    except Exception:
-        message = escape_markdown("⚠️ Failed to disable message deletion. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        return
-
-    # Confirm to the user
-    confirmation_message = escape_markdown(
-        f"✅ Message deletion disabled for group `{group_id}`.",
-        version=2
-    )
-    await context.bot.send_message(
-        chat_id=user.id,
-        text=confirmation_message,
-        parse_mode='MarkdownV2'
-    )
-    logger.info(f"User {user.id} disabled message deletion for group {group_id}.")
+# Note: These commands are already handled above.
 
 # ------------------- Message Handler Functions -------------------
 
@@ -1709,6 +1716,57 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.error(f"Failed to delete message in group {group_id}: {e}")
 
+async def handle_private_message_for_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle private messages sent by the authorized user to set group names.
+    """
+    if update.effective_chat.type != ChatType.PRIVATE:
+        return
+    message = update.message
+    user = message.from_user
+    logger.debug(f"Received private message from user {user.id}: {message.text}")
+    if user.id == ALLOWED_USER_ID and user.id in pending_group_names:
+        g_id = pending_group_names.pop(user.id)
+        group_name = message.text.strip()
+        if group_name:
+            try:
+                escaped_group_name = escape_markdown(group_name, version=2)
+                set_group_name(g_id, group_name)
+                confirmation_message = escape_markdown(
+                    f"✅ Group name for `{g_id}` set to: *{escaped_group_name}*",
+                    version=2
+                )
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=confirmation_message,
+                    parse_mode='MarkdownV2'
+                )
+                logger.info(f"Group name for {g_id} set to {group_name} by user {user.id}")
+            except Exception as e:
+                error_message = escape_markdown("⚠️ Failed to set group name. Please try `/group_add` again.", version=2)
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=error_message,
+                    parse_mode='MarkdownV2'
+                )
+                logger.error(f"Error setting group name for {g_id} by user {user.id}: {e}")
+        else:
+            warning_message = escape_markdown("⚠️ Group name cannot be empty. Please try `/group_add` again.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=warning_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"Empty group name received from user {user.id} for group {g_id}")
+    else:
+        warning_message = escape_markdown("⚠️ No pending group to set name for.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=warning_message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Received group name from user {user.id} with no pending group.")
+
 # ------------------- Utility Function -------------------
 
 def is_arabic(text):
@@ -1725,15 +1783,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     logger.error("An error occurred:", exc_info=context.error)
 
-# ------------------- Helper Function to Remove Deletion Flag -------------------
+# ------------------- Additional Utility Function -------------------
 
 async def remove_deletion_flag_after_timeout(group_id):
     """
-    Remove the deletion flag for a group after the specified timeframe.
+    Remove the deletion flag for a group after a specified timeout.
     """
     await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
     delete_all_messages_after_removal.pop(group_id, None)
-    logger.info(f"Removed deletion flag for group {group_id} after timeout.")
+    logger.info(f"Message deletion flag removed for group {group_id} after timeout.")
 
 # ------------------- Main Function -------------------
 
@@ -1776,9 +1834,8 @@ def main():
     application.add_handler(CommandHandler("be_sad", be_sad_cmd))
     application.add_handler(CommandHandler("be_happy", be_happy_cmd))
     application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
-    application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # Updated Command
-    application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # Updated Command
-    application.add_handler(CommandHandler("show_removed_users", show_removed_users_cmd))  # Alias
+    application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
+    application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
     application.add_handler(CommandHandler("rmove_user_removed", rmove_user_removed_cmd))  # New Command
 
     # **Register specific message handlers first**
