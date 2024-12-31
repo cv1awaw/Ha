@@ -1905,16 +1905,9 @@ async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_T
 
 # ------------------- Main Function -------------------
 
-async def on_startup(application):
+async def main_async():
     """
-    Function to run on startup. Schedules the cleanup task.
-    """
-    application.create_task(cleanup_task())
-    logger.info("Scheduled cleanup task for 'Removed Users' list.")
-
-def main():
-    """
-    Main function to initialize the bot and register handlers.
+    Asynchronous main function to initialize the bot and register handlers.
     """
     try:
         init_db()
@@ -1979,10 +1972,21 @@ def main():
     # Register error handler
     application.add_error_handler(error_handler)
 
-    # Register on_startup handler to schedule cleanup_task
-    application.run_polling(on_startup=on_startup)
+    # Schedule the cleanup_task
+    application.create_task(cleanup_task())
+    logger.info("Scheduled cleanup task for 'Removed Users' list.")
 
-    logger.info("🚀 Bot started.")
+    # Start polling
+    await application.run_polling()
+
+def main():
+    """
+    Entry point to run the asynchronous main_async function.
+    """
+    try:
+        asyncio.run(main_async())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped by user.")
 
 if __name__ == '__main__':
     main()
