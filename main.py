@@ -394,7 +394,6 @@ def add_user_to_permissions_removed_users(group_id, user_id, removal_reason="Rem
             logger.warning(f"User {user_id} is already in 'removed_users' for group {group_id}.")
             conn.close()
             return False  # Indicate that the user was already in the list
-
         c.execute('''
             INSERT INTO removed_users (group_id, user_id, removal_reason)
             VALUES (?, ?, ?)
@@ -411,18 +410,18 @@ def list_removed_users(group_id=None):
     """
     Retrieve all users from the removed_users table.
     If group_id is provided, filter by that group.
-    Returns a list of tuples containing group_id, user_id, removal_reason, and removal_time.
+    Returns a list of tuples containing user_id, removal_reason, and removal_time.
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         if group_id:
-            c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users WHERE group_id = ?', (group_id,))
+            c.execute('SELECT user_id, removal_reason, removal_time FROM removed_users WHERE group_id = ?', (group_id,))
         else:
             c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
         users = c.fetchall()
         conn.close()
-        logger.info("Fetched list of removed users with group associations.")
+        logger.info("Fetched list of removed users.")
         return users
     except Exception as e:
         logger.error(f"Error fetching removed users: {e}")
