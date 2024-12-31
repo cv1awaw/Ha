@@ -1905,9 +1905,10 @@ async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_T
 
 # ------------------- Main Function -------------------
 
-async def main_async():
+async def main_async(application):
     """
     Asynchronous main function to initialize the bot and register handlers.
+    This function is now passed as the on_startup callback.
     """
     try:
         init_db()
@@ -1915,82 +1916,97 @@ async def main_async():
         logger.critical(f"Bot cannot start due to database initialization failure: {e}")
         sys.exit(f"Bot cannot start due to database initialization failure: {e}")
 
-    TOKEN = os.getenv('BOT_TOKEN')
-    if not TOKEN:
-        logger.error("⚠️ BOT_TOKEN is not set.")
-        sys.exit("⚠️ BOT_TOKEN is not set.")
-    TOKEN = TOKEN.strip()
-    if TOKEN.lower().startswith('bot='):
-        TOKEN = TOKEN[len('bot='):].strip()
-        logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
+    # Schedule the cleanup_task
+    application.create_task(cleanup_task())
+    logger.info("Scheduled cleanup task for 'Removed Users' list.")
 
-    try:
-        application = ApplicationBuilder().token(TOKEN).build()
-    except Exception as e:
-        logger.critical(f"Failed to build the application with the provided TOKEN: {e}")
-        sys.exit(f"Failed to build the application with the provided TOKEN: {e}")
+# ------------------- Utility Function -------------------
 
-    # Register command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("group_add", group_add_cmd))
-    application.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
-    application.add_handler(CommandHandler("bypass", bypass_cmd))
-    application.add_handler(CommandHandler("unbypass", unbypass_cmd))
-    application.add_handler(CommandHandler("group_id", group_id_cmd))
-    application.add_handler(CommandHandler("show", show_groups_cmd))
-    application.add_handler(CommandHandler("info", info_cmd))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
-    application.add_handler(CommandHandler("be_sad", be_sad_cmd))
-    application.add_handler(CommandHandler("be_happy", be_happy_cmd))
-    application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
-    application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
-    application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
-    application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))  # New Command
-    application.add_handler(CommandHandler("check", check_cmd))  # Ensure only one /check handler
+async def remove_deletion_flag_after_timeout(group_id):
+    """
+    Remove the deletion flag for a group after a specified timeout.
+    """
+    await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
+    delete_all_messages_after_removal.pop(group_id, None)
+    logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
 
-    # Register message handler for private messages
-    # This single handler will manage both group name assignments and user removals
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        handle_private_message
-    ))
-
-    # Register message handlers for group chats
-    # 1. Handle deleting Arabic messages
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-        delete_arabic_messages
-    ))
-
-    # 2. Handle any messages to delete during the deletion flag
-    application.add_handler(MessageHandler(
-        filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-        delete_any_messages
-    ))
-
-    # Register error handler
-    application.add_error_handler(error_handler)
-
-    # Define the on_startup callback to schedule the cleanup_task
-    async def on_startup(application):
-        """
-        Function to run on startup. Schedules the cleanup task.
-        """
-        application.create_task(cleanup_task())
-        logger.info("Scheduled cleanup task for 'Removed Users' list.")
-
-    # Start polling with on_startup callback
-    await application.run_polling(on_startup=on_startup)
+# ------------------- Start Polling -------------------
 
 def main():
     """
-    Entry point to run the asynchronous main_async function.
+    Entry point to run the asynchronous main_async function via the on_startup callback.
     """
     try:
-        asyncio.run(main_async())
+        TOKEN = os.getenv('BOT_TOKEN')
+        if not TOKEN:
+            logger.error("⚠️ BOT_TOKEN is not set.")
+            sys.exit("⚠️ BOT_TOKEN is not set.")
+        TOKEN = TOKEN.strip()
+        if TOKEN.lower().startswith('bot='):
+            TOKEN = TOKEN[len('bot='):].strip()
+            logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
+
+        # Build the application
+        application = ApplicationBuilder().token(TOKEN).build()
+
+        # Register command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("group_add", group_add_cmd))
+        application.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
+        application.add_handler(CommandHandler("bypass", bypass_cmd))
+        application.add_handler(CommandHandler("unbypass", unbypass_cmd))
+        application.add_handler(CommandHandler("group_id", group_id_cmd))
+        application.add_handler(CommandHandler("show", show_groups_cmd))
+        application.add_handler(CommandHandler("info", info_cmd))
+        application.add_handler(CommandHandler("help", help_cmd))
+        application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
+        application.add_handler(CommandHandler("be_sad", be_sad_cmd))
+        application.add_handler(CommandHandler("be_happy", be_happy_cmd))
+        application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
+        application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
+        application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
+        application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))  # New Command
+        application.add_handler(CommandHandler("check", check_cmd))  # Ensure only one /check handler
+
+        # Register message handler for private messages
+        # This single handler will manage both group name assignments and user removals
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            handle_private_message
+        ))
+
+        # Register message handlers for group chats
+        # 1. Handle deleting Arabic messages
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            delete_arabic_messages
+        ))
+
+        # 2. Handle any messages to delete during the deletion flag
+        application.add_handler(MessageHandler(
+            filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            delete_any_messages
+        ))
+
+        # Register error handler
+        application.add_error_handler(error_handler)
+
+        # Define the on_startup callback to initialize the database and schedule tasks
+        async def on_startup(application):
+            """
+            Function to run on startup. Initializes the database and schedules the cleanup task.
+            """
+            init_db()
+            await main_async(application)
+
+        # Start polling with on_startup callback
+        application.run_polling(on_startup=on_startup)
+
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped by user.")
+    except Exception as e:
+        logger.critical(f"Failed to start the bot: {e}")
+        sys.exit(f"Failed to start the bot: {e}")
 
 if __name__ == '__main__':
     main()
