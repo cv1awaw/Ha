@@ -17,7 +17,6 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     filters,
-    JobQueue,
 )
 from telegram.helpers import escape_markdown
 
@@ -1211,9 +1210,8 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
         # Organize removed users by group
         groups = {}
         for record in removed_users:
-            if len(record) == 3:
-                # If group_id is not included
-                group_id, user_id, removal_reason, removal_time = record[0], record[1], record[2], record[3]
+            if len(record) == 4:
+                group_id, user_id, removal_reason, removal_time = record
             else:
                 group_id, user_id, removal_reason, removal_time = record
             if group_id not in groups:
@@ -1514,7 +1512,7 @@ def is_arabic(text):
 
 # ------------------- Error Handler -------------------
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle errors that occur during updates.
     """
@@ -1530,7 +1528,7 @@ async def remove_deletion_flag_after_timeout(group_id):
     delete_all_messages_after_removal.pop(group_id, None)
     logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
 
-async def cleanup_removed_users(context: ContextTypes.DEFAULT_TYPE):
+async def cleanup_removed_users():
     """
     Periodically clean up the 'Removed Users' list by deleting entries
     that were removed by the bot with a specific removal_reason.
@@ -1546,6 +1544,14 @@ async def cleanup_removed_users(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Cleaned up {changes} entries from 'Removed Users' list with removal_reason='{BOT_REMOVAL_REASON}'.")
     except Exception as e:
         logger.error(f"Error during cleanup of 'Removed Users' list: {e}")
+
+async def cleanup_task(application):
+    """
+    Background task to periodically clean up 'Removed Users' entries.
+    """
+    while True:
+        await cleanup_removed_users()
+        await asyncio.sleep(CLEANUP_INTERVAL)
 
 # ------------------- Be Sad and Be Happy Commands -------------------
 
@@ -1966,10 +1972,9 @@ def main():
     # Register error handler
     application.add_error_handler(error_handler)
 
-    # Register cleanup job
-    job_queue = application.job_queue
-    job_queue.run_repeating(cleanup_removed_users, interval=CLEANUP_INTERVAL, first=10)
-    logger.info("Scheduled cleanup job for 'Removed Users' list.")
+    # Register cleanup task
+    asyncio.create_task(cleanup_task(application))
+    logger.info("Scheduled cleanup task for 'Removed Users' list.")
 
     logger.info("🚀 Bot starting...")
     try:
