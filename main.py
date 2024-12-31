@@ -1545,7 +1545,7 @@ async def cleanup_removed_users():
     except Exception as e:
         logger.error(f"Error during cleanup of 'Removed Users' list: {e}")
 
-async def cleanup_task(application):
+async def cleanup_task():
     """
     Background task to periodically clean up 'Removed Users' entries.
     """
@@ -1905,6 +1905,13 @@ async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_T
 
 # ------------------- Main Function -------------------
 
+async def on_startup(application):
+    """
+    Function to run on startup. Schedules the cleanup task.
+    """
+    application.create_task(cleanup_task())
+    logger.info("Scheduled cleanup task for 'Removed Users' list.")
+
 def main():
     """
     Main function to initialize the bot and register handlers.
@@ -1972,16 +1979,10 @@ def main():
     # Register error handler
     application.add_error_handler(error_handler)
 
-    # Register cleanup task
-    asyncio.create_task(cleanup_task(application))
-    logger.info("Scheduled cleanup task for 'Removed Users' list.")
+    # Register on_startup handler to schedule cleanup_task
+    application.run_polling(on_startup=on_startup)
 
-    logger.info("🚀 Bot starting...")
-    try:
-        application.run_polling()
-    except Exception as e:
-        logger.critical(f"Bot encountered a critical error and is shutting down: {e}")
-        sys.exit(f"Bot encountered a critical error and is shutting down: {e}")
+    logger.info("🚀 Bot started.")
 
 if __name__ == '__main__':
     main()
