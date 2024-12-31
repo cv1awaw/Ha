@@ -17,6 +17,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     filters,
+    JobQueue,
 )
 from telegram.helpers import escape_markdown
 
@@ -33,6 +34,12 @@ LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
 
 # Timeframe (in seconds) to delete messages after user removal
 MESSAGE_DELETE_TIMEFRAME = 15  # Increased to 15 seconds to better capture system messages
+
+# Cleanup interval (in seconds) for removing 'Removed by Lms helper' entries
+CLEANUP_INTERVAL = 3600  # Every hour
+
+# Removal reason identifier
+BOT_REMOVAL_REASON = "Removed by Lms helper"
 
 # ------------------- Logging Configuration -------------------
 
@@ -103,7 +110,7 @@ def init_permissions_db():
             )
         ''')
         
-        # Create removed_users table with group_id
+        # Create removed_users table with group_id and removal_reason
         c.execute('''
             CREATE TABLE IF NOT EXISTS removed_users (
                 group_id INTEGER,
@@ -331,7 +338,7 @@ def is_deletion_enabled(group_id):
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
 
-def add_user_to_removed_users(group_id, user_id, removal_reason="Removed via /rmove_user"):
+def add_user_to_removed_users(group_id, user_id, removal_reason="Removed by Lms helper"):
     """
     Add a user to the removed_users table for a specific group.
     """
@@ -1378,9 +1385,9 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
         return
 
-    # Add user to removed_users list
+    # Add user to removed_users list with specific removal_reason
     try:
-        add_user_to_removed_users(group_id, target_user_id)
+        add_user_to_removed_users(group_id, target_user_id, removal_reason=BOT_REMOVAL_REASON)
     except Exception as e:
         message = escape_markdown("⚠️ Failed to add user to 'Removed Users' list. Please try again later.", version=2)
         await context.bot.send_message(
@@ -1522,6 +1529,23 @@ async def remove_deletion_flag_after_timeout(group_id):
     await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
     delete_all_messages_after_removal.pop(group_id, None)
     logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
+
+async def cleanup_removed_users(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Periodically clean up the 'Removed Users' list by deleting entries
+    that were removed by the bot with a specific removal_reason.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('DELETE FROM removed_users WHERE removal_reason = ?', (BOT_REMOVAL_REASON,))
+        changes = c.rowcount
+        conn.commit()
+        conn.close()
+        if changes > 0:
+            logger.info(f"Cleaned up {changes} entries from 'Removed Users' list with removal_reason='{BOT_REMOVAL_REASON}'.")
+    except Exception as e:
+        logger.error(f"Error during cleanup of 'Removed Users' list: {e}")
 
 # ------------------- Be Sad and Be Happy Commands -------------------
 
@@ -1941,6 +1965,11 @@ def main():
 
     # Register error handler
     application.add_error_handler(error_handler)
+
+    # Register cleanup job
+    job_queue = application.job_queue
+    job_queue.run_repeating(cleanup_removed_users, interval=CLEANUP_INTERVAL, first=10)
+    logger.info("Scheduled cleanup job for 'Removed Users' list.")
 
     logger.info("🚀 Bot starting...")
     try:
