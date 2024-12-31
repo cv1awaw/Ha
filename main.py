@@ -1972,12 +1972,16 @@ async def main_async():
     # Register error handler
     application.add_error_handler(error_handler)
 
-    # Schedule the cleanup_task
-    application.create_task(cleanup_task())
-    logger.info("Scheduled cleanup task for 'Removed Users' list.")
+    # Define the on_startup callback to schedule the cleanup_task
+    async def on_startup(application):
+        """
+        Function to run on startup. Schedules the cleanup task.
+        """
+        application.create_task(cleanup_task())
+        logger.info("Scheduled cleanup task for 'Removed Users' list.")
 
-    # Start polling
-    await application.run_polling()
+    # Start polling with on_startup callback
+    await application.run_polling(on_startup=on_startup)
 
 def main():
     """
