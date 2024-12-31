@@ -532,7 +532,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if user.id != ALLOWED_USER_ID:
             return  # Ignore unauthorized users
-        message = escape_markdown("✅ Bot is running and ready.", version=2)
+        message = escape_markdown(
+            "✅ Bot is running and ready.",
+            version=2
+        )
         await context.bot.send_message(
             chat_id=user.id,
             text=message,
@@ -1448,15 +1451,15 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     Delete messages containing Arabic text in groups where deletion is enabled.
     """
     message = update.message
-    if not message or not message.text:
-        logger.debug("Received a non-text or empty message.")
-        return  # Ignore non-text messages or empty messages
+    if not message:
+        logger.debug("Received a non-message update.")
+        return  # Ignore non-message updates
 
     user = message.from_user
     chat = message.chat
     group_id = chat.id
 
-    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text}")
+    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text or message.caption}")
 
     # Check if deletion is enabled for this group
     if not is_deletion_enabled(group_id):
@@ -1468,8 +1471,14 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
         logger.debug(f"User {user.id} is bypassed. Message will not be deleted.")
         return
 
-    # Check if the message contains Arabic
-    if is_arabic(message.text):
+    # Check if the message contains Arabic in text or caption
+    text_to_check = ""
+    if message.text:
+        text_to_check = message.text
+    elif message.caption:
+        text_to_check = message.caption
+
+    if text_to_check and is_arabic(text_to_check):
         try:
             await message.delete()
             logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
@@ -1927,9 +1936,9 @@ def main():
     ))
 
     # Register message handlers for group chats
-    # 1. Handle deleting Arabic messages
+    # 1. Handle deleting Arabic messages (including captions)
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        (filters.TEXT | filters.Caption) & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_arabic_messages
     ))
 
