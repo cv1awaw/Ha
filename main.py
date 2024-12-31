@@ -470,10 +470,10 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 text=message,
                 parse_mode='MarkdownV2'
             )
-            logger.warning(f"Received invalid user_id '{message_text}' from user {user.id} for removal from group {group_id}")
+            logger.warning(f"Non-integer user_id provided to handle_pending_removal by user {user.id}: {message_text}")
             return
         
-        # Check if the user is in the removed_users list for the group
+        # Check if the user is in 'Removed Users' list for the group
         try:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
@@ -486,7 +486,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                     text=message,
                     parse_mode='MarkdownV2'
                 )
-                logger.warning(f"User {target_user_id} not found in 'Removed Users' for group {group_id} during removal by user {user.id}")
+                logger.warning(f"User {target_user_id} not in 'Removed Users' for group {group_id} during removal by user {user.id}")
                 return
             # Proceed to remove
             c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
