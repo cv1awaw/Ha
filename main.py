@@ -34,12 +34,6 @@ LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
 # Timeframe (in seconds) to delete messages after user removal
 MESSAGE_DELETE_TIMEFRAME = 15  # Increased to 15 seconds to better capture system messages
 
-# Cleanup interval (in seconds) for removing 'Removed by Lms helper' entries
-CLEANUP_INTERVAL = 3600  # Every hour
-
-# Removal reason identifier
-BOT_REMOVAL_REASON = "Removed by Lms helper"
-
 # ------------------- Logging Configuration -------------------
 
 logging.basicConfig(
@@ -109,7 +103,7 @@ def init_permissions_db():
             )
         ''')
         
-        # Create removed_users table with group_id and removal_reason
+        # Create removed_users table with group_id
         c.execute('''
             CREATE TABLE IF NOT EXISTS removed_users (
                 group_id INTEGER,
@@ -337,7 +331,7 @@ def is_deletion_enabled(group_id):
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
 
-def add_user_to_removed_users(group_id, user_id, removal_reason="Removed by Lms helper"):
+def add_user_to_removed_users(group_id, user_id, removal_reason="Removed via /rmove_user"):
     """
     Add a user to the removed_users table for a specific group.
     """
@@ -476,10 +470,10 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 text=message,
                 parse_mode='MarkdownV2'
             )
-            logger.warning(f"Non-integer user_id provided to handle_pending_removal by user {user.id}: {message_text}")
+            logger.warning(f"Received invalid user_id '{message_text}' from user {user.id} for removal from group {group_id}")
             return
         
-        # Check if the user is in 'Removed Users' list for the group
+        # Check if the user is in the removed_users list for the group
         try:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
@@ -492,7 +486,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                     text=message,
                     parse_mode='MarkdownV2'
                 )
-                logger.warning(f"User {target_user_id} not in 'Removed Users' for group {group_id} during removal by user {user.id}")
+                logger.warning(f"User {target_user_id} not found in 'Removed Users' for group {group_id} during removal by user {user.id}")
                 return
             # Proceed to remove
             c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
@@ -1210,8 +1204,9 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
         # Organize removed users by group
         groups = {}
         for record in removed_users:
-            if len(record) == 4:
-                group_id, user_id, removal_reason, removal_time = record
+            if len(record) == 3:
+                # If group_id is not included
+                group_id, user_id, removal_reason, removal_time = record[0], record[1], record[2], record[3]
             else:
                 group_id, user_id, removal_reason, removal_time = record
             if group_id not in groups:
@@ -1383,9 +1378,9 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
         return
 
-    # Add user to removed_users list with specific removal_reason
+    # Add user to removed_users list
     try:
-        add_user_to_removed_users(group_id, target_user_id, removal_reason=BOT_REMOVAL_REASON)
+        add_user_to_removed_users(group_id, target_user_id)
     except Exception as e:
         message = escape_markdown("⚠️ Failed to add user to 'Removed Users' list. Please try again later.", version=2)
         await context.bot.send_message(
@@ -1512,7 +1507,7 @@ def is_arabic(text):
 
 # ------------------- Error Handler -------------------
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle errors that occur during updates.
     """
@@ -1527,31 +1522,6 @@ async def remove_deletion_flag_after_timeout(group_id):
     await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
     delete_all_messages_after_removal.pop(group_id, None)
     logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
-
-async def cleanup_removed_users():
-    """
-    Periodically clean up the 'Removed Users' list by deleting entries
-    that were removed by the bot with a specific removal_reason.
-    """
-    try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('DELETE FROM removed_users WHERE removal_reason = ?', (BOT_REMOVAL_REASON,))
-        changes = c.rowcount
-        conn.commit()
-        conn.close()
-        if changes > 0:
-            logger.info(f"Cleaned up {changes} entries from 'Removed Users' list with removal_reason='{BOT_REMOVAL_REASON}'.")
-    except Exception as e:
-        logger.error(f"Error during cleanup of 'Removed Users' list: {e}")
-
-async def cleanup_task():
-    """
-    Background task to periodically clean up 'Removed Users' entries.
-    """
-    while True:
-        await cleanup_removed_users()
-        await asyncio.sleep(CLEANUP_INTERVAL)
 
 # ------------------- Be Sad and Be Happy Commands -------------------
 
@@ -1905,10 +1875,9 @@ async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_T
 
 # ------------------- Main Function -------------------
 
-async def main_async(application):
+def main():
     """
-    Asynchronous main function to initialize the bot and register handlers.
-    This function is now passed as the on_startup callback.
+    Main function to initialize the bot and register handlers.
     """
     try:
         init_db()
@@ -1916,97 +1885,69 @@ async def main_async(application):
         logger.critical(f"Bot cannot start due to database initialization failure: {e}")
         sys.exit(f"Bot cannot start due to database initialization failure: {e}")
 
-    # Schedule the cleanup_task
-    application.create_task(cleanup_task())
-    logger.info("Scheduled cleanup task for 'Removed Users' list.")
+    TOKEN = os.getenv('BOT_TOKEN')
+    if not TOKEN:
+        logger.error("⚠️ BOT_TOKEN is not set.")
+        sys.exit("⚠️ BOT_TOKEN is not set.")
+    TOKEN = TOKEN.strip()
+    if TOKEN.lower().startswith('bot='):
+        TOKEN = TOKEN[len('bot='):].strip()
+        logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
 
-# ------------------- Utility Function -------------------
-
-async def remove_deletion_flag_after_timeout(group_id):
-    """
-    Remove the deletion flag for a group after a specified timeout.
-    """
-    await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
-    delete_all_messages_after_removal.pop(group_id, None)
-    logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
-
-# ------------------- Start Polling -------------------
-
-def main():
-    """
-    Entry point to run the asynchronous main_async function via the on_startup callback.
-    """
     try:
-        TOKEN = os.getenv('BOT_TOKEN')
-        if not TOKEN:
-            logger.error("⚠️ BOT_TOKEN is not set.")
-            sys.exit("⚠️ BOT_TOKEN is not set.")
-        TOKEN = TOKEN.strip()
-        if TOKEN.lower().startswith('bot='):
-            TOKEN = TOKEN[len('bot='):].strip()
-            logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
-
-        # Build the application
         application = ApplicationBuilder().token(TOKEN).build()
-
-        # Register command handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("group_add", group_add_cmd))
-        application.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
-        application.add_handler(CommandHandler("bypass", bypass_cmd))
-        application.add_handler(CommandHandler("unbypass", unbypass_cmd))
-        application.add_handler(CommandHandler("group_id", group_id_cmd))
-        application.add_handler(CommandHandler("show", show_groups_cmd))
-        application.add_handler(CommandHandler("info", info_cmd))
-        application.add_handler(CommandHandler("help", help_cmd))
-        application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
-        application.add_handler(CommandHandler("be_sad", be_sad_cmd))
-        application.add_handler(CommandHandler("be_happy", be_happy_cmd))
-        application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
-        application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
-        application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
-        application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))  # New Command
-        application.add_handler(CommandHandler("check", check_cmd))  # Ensure only one /check handler
-
-        # Register message handler for private messages
-        # This single handler will manage both group name assignments and user removals
-        application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-            handle_private_message
-        ))
-
-        # Register message handlers for group chats
-        # 1. Handle deleting Arabic messages
-        application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-            delete_arabic_messages
-        ))
-
-        # 2. Handle any messages to delete during the deletion flag
-        application.add_handler(MessageHandler(
-            filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-            delete_any_messages
-        ))
-
-        # Register error handler
-        application.add_error_handler(error_handler)
-
-        # Define the on_startup callback to initialize the database and schedule tasks
-        async def on_startup(application):
-            """
-            Function to run on startup. Initializes the database and schedules the cleanup task.
-            """
-            init_db()
-            await main_async(application)
-
-        # Start polling with on_startup callback
-        application.run_polling(on_startup=on_startup)
-
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped by user.")
     except Exception as e:
-        logger.critical(f"Failed to start the bot: {e}")
-        sys.exit(f"Failed to start the bot: {e}")
+        logger.critical(f"Failed to build the application with the provided TOKEN: {e}")
+        sys.exit(f"Failed to build the application with the provided TOKEN: {e}")
+
+    # Register command handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("group_add", group_add_cmd))
+    application.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
+    application.add_handler(CommandHandler("bypass", bypass_cmd))
+    application.add_handler(CommandHandler("unbypass", unbypass_cmd))
+    application.add_handler(CommandHandler("group_id", group_id_cmd))
+    application.add_handler(CommandHandler("show", show_groups_cmd))
+    application.add_handler(CommandHandler("info", info_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
+    application.add_handler(CommandHandler("be_sad", be_sad_cmd))
+    application.add_handler(CommandHandler("be_happy", be_happy_cmd))
+    application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
+    application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
+    application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
+    application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))  # New Command
+    application.add_handler(CommandHandler("check", check_cmd))  # Ensure only one /check handler
+
+    # Register message handler for private messages
+    # This single handler will manage both group name assignments and user removals
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        handle_private_message
+    ))
+
+    # Register message handlers for group chats
+    # 1. Handle deleting Arabic messages
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_arabic_messages
+    ))
+
+    # 2. Handle any messages to delete during the deletion flag
+    application.add_handler(MessageHandler(
+        filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        delete_any_messages
+    ))
+
+    # Register error handler
+    application.add_error_handler(error_handler)
+
+    logger.info("🚀 Bot starting...")
+    try:
+        application.run_polling()
+    except Exception as e:
+        logger.critical(f"Bot encountered a critical error and is shutting down: {e}")
+        sys.exit(f"Bot encountered a critical error and is shutting down: {e}")
 
 if __name__ == '__main__':
     main()
