@@ -341,7 +341,7 @@ def remove_user_from_permissions_removed_users(group_id, user_id):
         c = conn.cursor()
         
         # Check if the user exists in the removed_users table
-        c.execute('SELECT * FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
         
         if c.fetchone():
             logger.debug(f"Record found: group_id={group_id}, user_id={user_id}")
@@ -486,6 +486,91 @@ async def handle_private_message_for_group_name(update: Update, context: Context
             parse_mode='MarkdownV2'
         )
         logger.warning(f"Received group name from user {user.id} with no pending group.")
+
+async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle the user's response to remove a user from the 'Removed Users' list.
+    Expected to receive a user_id in the message.
+    """
+    user = update.effective_user
+    message_text = update.message.text.strip()
+    logger.debug(f"handle_pending_removal called by user {user.id} with message: {message_text}")
+    
+    if user.id not in pending_user_removals:
+        # No pending removal
+        warning_message = escape_markdown("⚠️ No pending removal found. Please use the appropriate command.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=warning_message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"User {user.id} attempted to remove a user without pending removal.")
+        return
+    
+    group_id = pending_user_removals.pop(user.id)
+    
+    try:
+        target_user_id = int(message_text)
+    except ValueError:
+        message = escape_markdown("⚠️ `user_id` must be an integer.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.warning(f"Non-integer user_id provided to handle_pending_removal by user {user.id}: {message_text}")
+        return
+    
+    # Check if the user is in 'Removed Users' list for the group
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
+        if not c.fetchone():
+            conn.close()
+            message = escape_markdown(f"⚠️ User `{target_user_id}` is not in the 'Removed Users' list for group `{group_id}`.", version=2)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.warning(f"User {target_user_id} not in 'Removed Users' for group {group_id} during removal by user {user.id}")
+            return
+        # Proceed to remove
+        c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        message = escape_markdown("⚠️ Failed to remove user from 'Removed Users'. Please try again later.", version=2)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=message,
+            parse_mode='MarkdownV2'
+        )
+        logger.error(f"Error removing user {target_user_id} from 'Removed Users' for group {group_id}: {e}")
+        return
+    
+    # Optionally, revoke permissions if necessary
+    try:
+        revoke_user_permissions(target_user_id)
+    except Exception as e:
+        logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
+        # Not critical to send message; user is removed from 'Removed Users' list
+        # So we can proceed
+    
+    confirmation_message = escape_markdown(
+        f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
+        version=2
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirmation_message,
+            parse_mode='MarkdownV2'
+        )
+        logger.info(f"Removed user {target_user_id} from 'Removed Users' for group {group_id} by user {user.id}")
+    except Exception as e:
+        logger.error(f"Error sending confirmation message for handle_pending_removal: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1450,9 +1535,6 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
-# ------------------- New Commands: /add_removed_user & /list_removed_users -------------------
-# Note: These functions are already defined above. Ensure that you do not have duplicate definitions.
-
 # ------------------- Message Handler Functions -------------------
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1808,6 +1890,99 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"User {uid} has been removed from group {group_id} via /check command.")
             except Exception as e:
                 logger.error(f"Failed to remove user {uid} from group {group_id}: {e}")
+
+# ------------------- Message Handler Functions -------------------
+
+async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Delete messages containing Arabic text in groups where deletion is enabled.
+    """
+    message = update.message
+    if not message or not message.text:
+        logger.debug("Received a non-text or empty message.")
+        return  # Ignore non-text messages
+
+    user = message.from_user
+    chat = message.chat
+    group_id = chat.id
+
+    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text}")
+
+    # Check if deletion is enabled for this group
+    if not is_deletion_enabled(group_id):
+        logger.debug(f"Deletion not enabled for group {group_id}.")
+        return
+
+    # Check if the user is bypassed
+    if is_bypass_user(user.id):
+        logger.debug(f"User {user.id} is bypassed. Message will not be deleted.")
+        return
+
+    # Check if the message contains Arabic
+    if is_arabic(message.text):
+        try:
+            await message.delete()
+            logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
+            # Warning message removed to only delete the message without notifying the user
+            # If you ever want to send a message, uncomment the lines below
+            # warning_message = escape_markdown(
+            #     "⚠️ Arabic messages are not allowed in this group.",
+            #     version=2
+            # )
+            # await context.bot.send_message(
+            #     chat_id=user.id,
+            #     text=warning_message,
+            #     parse_mode='MarkdownV2'
+            # )
+            # logger.debug(f"Sent warning to user {user.id} for Arabic message in group {group_id}.")
+        except Exception as e:
+            logger.error(f"Error deleting message in group {group_id}: {e}")
+
+async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Delete any message sent to the group if the deletion flag is active.
+    This includes messages from users and system messages.
+    """
+    message = update.message
+    if not message:
+        return
+
+    chat = message.chat
+    group_id = chat.id
+
+    # Check if the group is flagged for message deletion
+    if group_id in delete_all_messages_after_removal:
+        try:
+            await message.delete()
+            logger.info(f"Deleted message in group {group_id}: {message.text or 'Non-text message.'}")
+        except Exception as e:
+            logger.error(f"Failed to delete message in group {group_id}: {e}")
+
+# ------------------- Utility Function -------------------
+
+def is_arabic(text):
+    """
+    Check if the text contains any Arabic characters.
+    """
+    return bool(re.search(r'[\u0600-\u06FF]', text))
+
+# ------------------- Error Handler -------------------
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle errors that occur during updates.
+    """
+    logger.error("An error occurred:", exc_info=context.error)
+
+# ------------------- Additional Utility Function -------------------
+
+async def remove_deletion_flag_after_timeout(group_id):
+    """
+    Remove the deletion flag for a group after a specified timeout.
+    """
+    await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
+    delete_all_messages_after_removal.pop(group_id, None)
+    logger.info(f"Message deletion flag removed for group {group_id} after timeout.")
 
 # ------------------- Be Sad and Be Happy Commands -------------------
 
