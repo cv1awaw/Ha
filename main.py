@@ -8,7 +8,8 @@ import asyncio
 from datetime import datetime, timedelta
 import re
 
-from telegram import Update, ChatType, ChatMemberStatus
+from telegram import Update
+from telegram.constants import ChatType, ChatMemberStatus
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -314,6 +315,15 @@ def list_removed_users(group_id=None):
 # Dictionary to track groups that should delete messages after removal
 # Format: {group_id: expiration_time}
 delete_all_messages_after_removal = {}
+
+# ------------------- Pending Actions -------------------
+
+# Dictionary to keep track of pending group names
+pending_group_names = {}
+
+# Dictionary to keep track of pending user removals
+# Format: {user_id: group_id}
+pending_user_removals = {}
 
 # ------------------- Command Handler Functions -------------------
 
@@ -1083,7 +1093,16 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
 
         # Organize removed users by group
         groups = {}
-        for group_id, user_id, reason, time in removed_users:
+        for record in removed_users:
+            if len(record) == 4:
+                group_id, user_id, reason, time = record
+            elif len(record) == 3:
+                # For backward compatibility if group_id isn't fetched
+                group_id, user_id, reason = record
+                time = "Unknown"
+            else:
+                continue  # Skip malformed records
+
             if group_id not in groups:
                 groups[group_id] = []
             groups[group_id].append((user_id, reason, time))
@@ -1194,6 +1213,8 @@ async def list_rmoved_rmove_cmd(update: Update, context: ContextTypes.DEFAULT_TY
         logger.debug(f"Sent removal prompt for group {group_id} to user {user.id}")
     except Exception as e:
         logger.error(f"Error sending removal prompt for group {group_id}: {e}")
+
+# ------------------- Existing /rmove_user Command -------------------
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1393,7 +1414,7 @@ def is_arabic(text):
 
 # ------------------- Error Handler -------------------
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle errors that occur during updates.
     """
@@ -1453,10 +1474,6 @@ def main():
     application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))
     # Register existing commands
     application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
-    application.add_handler(CommandHandler("be_sad", be_sad_cmd))
-    application.add_handler(CommandHandler("be_happy", be_happy_cmd))
-    application.add_handler(CommandHandler("check", check_cmd))
-
     # Register message handlers
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.Caption) & ~filters.COMMAND & filters.ChatType.PRIVATE,
