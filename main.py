@@ -495,7 +495,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if user.id != ALLOWED_USER_ID:
             return  # Ignore unauthorized users
-        message = escape_markdown("✅ Bot is running and ready.", version=2)
+        message = escape_markdown(
+            "✅ Bot is running and ready.",
+            version=2
+        )
         await context.bot.send_message(
             chat_id=user.id,
             text=message,
@@ -1407,18 +1410,18 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Delete messages containing Arabic text in groups where deletion is enabled.
+    Delete messages containing Arabic text or captions in groups where deletion is enabled.
     """
     message = update.message
-    if not message or not message.text:
-        logger.debug("Received a non-text or empty message.")
-        return  # Ignore non-text messages or empty messages
+    if not message:
+        logger.debug("Received a non-message update.")
+        return  # Ignore non-message updates
 
     user = message.from_user
     chat = message.chat
     group_id = chat.id
 
-    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text}")
+    logger.debug(f"Checking message in group {group_id} from user {user.id}")
 
     # Check if deletion is enabled for this group
     if not is_deletion_enabled(group_id):
@@ -1430,12 +1433,25 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
         logger.debug(f"User {user.id} is bypassed. Message will not be deleted.")
         return
 
-    # Check if the message contains Arabic
-    if is_arabic(message.text):
+    # Initialize flag to determine if the message should be deleted
+    should_delete = False
+
+    # Check text in messages
+    if message.text and is_arabic(message.text):
+        should_delete = True
+        logger.debug("Arabic text found in message.")
+
+    # Check caption in messages with media
+    elif message.caption and is_arabic(message.caption):
+        should_delete = True
+        logger.debug("Arabic text found in message caption.")
+
+    # If should delete, delete the message
+    if should_delete:
         try:
             await message.delete()
-            logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
-            # Warning message removed to only delete the message without notifying the user
+            logger.info(f"Deleted message from user {user.id} in group {group_id} due to Arabic content.")
+            # Optionally, send a warning message
         except Exception as e:
             logger.error(f"Error deleting message in group {group_id}: {e}")
 
@@ -1913,3 +1929,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+Jeep bot in English but I'll describe my problems in arabuc
+البوت شغال و ملش كلش كلش زين 
+بس من احد يرسل صورة او pdf فيه وصف عربي يعني صورة و تعتها بلعربي وصف وياها مضمون ما راح يخذفها خلي البوت يمشف اذا بلصورة او الملف وصف عربي و اذا موجود خليه يحذفه
