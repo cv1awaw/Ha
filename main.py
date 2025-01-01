@@ -1900,14 +1900,14 @@ def main():
     # Register message handler for private messages
     # This single handler will manage both group name assignments and user removals
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        (filters.TEXT | filters.Caption) & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_private_message
     ))
 
     # Register message handlers for group chats
     # 1. Handle deleting Arabic messages
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        (filters.TEXT | filters.Caption) & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_arabic_messages
     ))
 
