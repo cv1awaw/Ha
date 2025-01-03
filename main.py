@@ -8,7 +8,11 @@ import fcntl
 from datetime import datetime, timedelta
 import re
 import asyncio
-from telegram import Update, ChatMember
+from telegram import (
+    Update,
+    ChatMember,
+    ChatInviteLink,
+)
 from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import (
     ApplicationBuilder,
@@ -45,6 +49,21 @@ logger = logging.getLogger(__name__)
 
 # Dictionary to keep track of pending group names (for /group_add flow)
 pending_group_names = {}
+
+# For the new "provision" logic: track which user we’re editing and what’s toggled
+# Key: (group_id, user_id) -> dict of { provision_number: bool }
+provisions_status = {}  
+
+# If we need to track that we asked for the “Mute duration” after toggling Mute, store here:
+awaiting_mute_time = {}  # key: (group_id, user_id)
+
+# For demonstration, define 3 sample “provisions” to toggle:
+# 1 = Mute, 2 = Kick, 3 = Something else
+provision_labels = {
+    1: "Mute",
+    2: "Kick",
+    3: "Send Photos"  # Example: you can put anything
+}
 
 # ------------------- Lock Mechanism -------------------
 
@@ -412,12 +431,16 @@ delete_all_messages_after_removal = {}
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle private messages for setting group names (after /group_add).
+    Handle private messages for:
+      1) Setting group names (after /group_add)
+      2) Toggling user provisions (after /provision)
+      3) If we toggled Mute on, ask for minutes
     """
     user = update.effective_user
-    message_text = update.message.text.strip()
+    message_text = (update.message.text or "").strip()
     logger.debug(f"Received private message from {user.id}: {message_text}")
 
+    # 1) If user is in the pending group_name flow
     if user.id in pending_group_names:
         group_id = pending_group_names.pop(user.id)
         group_name = message_text
@@ -462,6 +485,86 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode='MarkdownV2'
             )
             logger.error(f"Error setting group name for {group_id}: {e}")
+        return
+
+    # 2) If user is toggling provisions
+    # We only allow the ALLOWED_USER_ID to do this.
+    if user.id == ALLOWED_USER_ID:
+        # Check if user previously did /provision <group_id> <user_id>
+        # If so, they should be in the dictionary
+        # and we expect them to send us either "1 2 3" or the mute time
+        for (grp, uid) in list(awaiting_mute_time.keys()):
+            # If we are specifically waiting for the MUTE time for this group/user:
+            if awaiting_mute_time[(grp, uid)]:
+                # user typed something presumably the number of minutes
+                try:
+                    minutes = int(message_text)
+                    # set that user to be muted for that many minutes (dummy code)
+                    # you’d do something like context.bot.restrict_chat_member(...) 
+                    # if you want an actual Telegram mute. 
+                    logger.info(f"Muting user {uid} in group {grp} for {minutes} minutes.")
+                    # Stop waiting for the time
+                    awaiting_mute_time.pop((grp, uid), None)
+                    txt = escape_markdown(f"✅ Mute set for {minutes} minutes.", version=2)
+                    await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+                except ValueError:
+                    wr = escape_markdown("⚠️ Please enter a valid integer for minutes.", version=2)
+                    await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
+                return
+
+        # Otherwise, if not waiting for MUTE time, maybe the user typed "1 2 3" to toggle
+        # We have to see which (group_id, user_id) the user is editing.
+        for key, p_dict in provisions_status.items():
+            (grp, uid) = key
+            # If we found a matching entry, we parse the user’s input
+            # But we only do so if user typed e.g. "1", "2 3", etc. 
+            # A quick check: does the message look like a list of numbers?
+            if re.match(r'^[0-9 ]+$', message_text):
+                # The user typed some numbers
+                numbers = message_text.split()
+                toggled = []
+                for n in numbers:
+                    try:
+                        n_int = int(n)
+                    except:
+                        continue
+                    if n_int in provision_labels:
+                        # Flip the bool
+                        prev = p_dict.get(n_int, False)
+                        new_val = not prev
+                        p_dict[n_int] = new_val
+                        toggled.append(n_int)
+
+                        # If the user just toggled Mute to True, ask for how many minutes
+                        if (n_int == 1) and (new_val is True):
+                            # Now we wait for the user to type the # of minutes
+                            awaiting_mute_time[(grp, uid)] = True
+                            txt = escape_markdown(
+                                "Enter the *number of minutes* to mute:", 
+                                version=2
+                            )
+                            await context.bot.send_message(
+                                chat_id=user.id,
+                                text=txt,
+                                parse_mode='MarkdownV2'
+                            )
+                            # We'll handle the actual restricting in the next message
+                        
+                # Summarize 
+                summary = "*Toggled:* \n"
+                for x in toggled:
+                    status = "ENABLED" if p_dict[x] else "DISABLED"
+                    summary += f"• {provision_labels[x]} -> {status}\n"
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=escape_markdown(summary, version=2),
+                    parse_mode='MarkdownV2'
+                )
+                return
+
+    # If we reach here, there's no recognized conversation in progress
+    # Do nothing or send a generic reply
+    logger.debug(f"No recognized conversation for private message: {message_text}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -565,7 +668,7 @@ async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /bypass <user_id> – add a user to bypass list
+    /bypass <user_id> – add a user to the bypass list
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
@@ -740,10 +843,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/be_sad <group_id>` – Enable Arabic message deletion
 • `/be_happy <group_id>` – Disable Arabic message deletion
 • `/rmove_user <group_id> <user_id>` – Remove user from group + DB
-• `/add_removed_user <group_id> <user_id>` – Add a user to the 'Removed Users'
+• `/add_removed_user <group_id> <user_id>` – Add a user to 'Removed Users'
 • `/list_removed_users` – Show all users in 'Removed Users'
 • `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
-• `/check <group_id>` – Validate 'Removed Users' vs. actual group membership
+• `/check <group_id>` – Validate 'Removed Users' vs. actual membership
+• `/provision <group_id> <user_id>` – Toggle user’s “permissions” or “actions”
+• `/link <group_id>` – Create a single\-use invite link
 """
     try:
         help_esc = escape_markdown(help_text, version=2)
@@ -809,6 +914,98 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         er = escape_markdown("⚠️ Failed to retrieve info. Try again.", version=2)
         await context.bot.send_message(chat_id=user.id, text=er, parse_mode='MarkdownV2')
 
+# ------------------- Additional Commands -------------------
+
+async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /provision <group_id> <user_id> – Show the user’s “provisions” or “actions” in numeric order
+    Then user can send the numbers in private chat to toggle them
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 2:
+        txt = escape_markdown("⚠️ Usage: `/provision <group_id> <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
+    except ValueError:
+        txt = escape_markdown("⚠️ Both <group_id> and <user_id> must be integers.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        warn = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
+        return
+
+    # Initialize if not present
+    if (g_id, u_id) not in provisions_status:
+        # By default, all are disabled
+        provisions_status[(g_id, u_id)] = {k: False for k in provision_labels.keys()}
+
+    p_dict = provisions_status[(g_id, u_id)]
+
+    # Build a display
+    lines = [
+        f"Provision list for user `{u_id}` in group `{g_id}`:",
+        "Type the number(s) in *private chat* to toggle.",
+        ""
+    ]
+    for num, label in provision_labels.items():
+        status = "ENABLED" if p_dict.get(num) else "DISABLED"
+        lines.append(f"{num}) {label} -> {status}")
+    lines.append("")
+    lines.append("Example: Type `1 2` in private chat to toggle Mute and Kick.")
+
+    msg = escape_markdown("\n".join(lines), version=2)
+    await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+
+async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /link <group_id> – create a single-use invite link for that group
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        txt = escape_markdown("⚠️ Usage: `/link <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except ValueError:
+        txt = escape_markdown("⚠️ <group_id> must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        warn = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
+        return
+
+    # Attempt to create a single-use invite link
+    try:
+        # This method requires the bot to be an admin in the group with
+        # “Invite Users via Link” permission.
+        link: ChatInviteLink = await context.bot.create_chat_invite_link(
+            chat_id=g_id,
+            member_limit=1  # Single use
+        )
+        # link.invite_link is the actual join URL
+        txt = escape_markdown(f"Single\-use link created:\n{link.invite_link}", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error creating invite link for group {g_id}: {e}")
+        txt = escape_markdown("⚠️ Could not create invite link. Check if the bot is admin.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+
 # ------------------- Commands to manage removed_users -------------------
 
 async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -837,7 +1034,7 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Check if user is already there
+    # Check if user is already in removed_users
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -1057,6 +1254,7 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     g_id = msg.chat.id
     if g_id in delete_all_messages_after_removal:
+        # If we are in the timeframe, delete everything
         try:
             await msg.delete()
             logger.info(f"Deleted message in group {g_id}")
@@ -1279,20 +1477,22 @@ def main():
     app.add_handler(CommandHandler("unremove_user", unremove_user_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
 
+    # New commands
+    app.add_handler(CommandHandler("provision", provision_cmd))
+    app.add_handler(CommandHandler("link", link_cmd))
+
     # Message handlers
     # 1) Delete if Arabic found in text or caption
     app.add_handler(MessageHandler(
-        filters.TEXT | filters.CAPTION,  # to ensure we catch textual content in either place
+        filters.TEXT | filters.CAPTION,
         delete_arabic_messages
     ))
-
     # 2) Delete flagged
     app.add_handler(MessageHandler(
         filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_any_messages
     ))
-
-    # 3) Private (handle group name)
+    # 3) Private messages (handle group name, toggles, etc.)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_private_message
