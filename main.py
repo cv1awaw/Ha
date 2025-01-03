@@ -25,52 +25,33 @@ from telegram.helpers import escape_markdown
 
 # ------------------- Configuration -------------------
 
-# Path to the SQLite database
 DATABASE = 'warnings.db'
-
-# Allowed user ID (Replace with your actual authorized user ID)
-ALLOWED_USER_ID = 6177929931  # Example: 6177929931
-
-# Lock file path
-LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
-
-# Timeframe (in seconds) to delete messages after user removal
+ALLOWED_USER_ID = 6177929931  # Replace with your actual Telegram user ID
+LOCK_FILE = '/tmp/telegram_bot.lock'  # Adjust path as needed
 MESSAGE_DELETE_TIMEFRAME = 15
 
 # ------------------- Logging Configuration -------------------
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to DEBUG for highly detailed output
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # ------------------- Pending Actions -------------------
 
-# Dictionary to keep track of pending group names (for /group_add flow)
-pending_group_names = {}
-
-# For the new "provision" logic: track which user we’re editing and what’s toggled
-# Key: (group_id, user_id) -> dict of { provision_number: bool }
+pending_group_names = {}  # { ALLOWED_USER_ID: group_id }
 provisions_status = {}  
-
-# If we need to track that we asked for the “Mute duration” after toggling Mute, store here:
-awaiting_mute_time = {}  # key: (group_id, user_id)
-
-# For demonstration, define 3 sample “provisions” to toggle:
-# 1 = Mute, 2 = Kick, 3 = Something else
+awaiting_mute_time = {}  
 provision_labels = {
     1: "Mute",
     2: "Kick",
-    3: "Send Photos"  # Example: you can put anything
+    3: "Send Photos"
 }
 
 # ------------------- Lock Mechanism -------------------
 
 def acquire_lock():
-    """
-    Acquire a lock to ensure only one instance of the bot is running.
-    """
     try:
         lock = open(LOCK_FILE, 'w')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -81,9 +62,6 @@ def acquire_lock():
         sys.exit("Another instance of the bot is already running.")
 
 def release_lock(lock):
-    """
-    Release the acquired lock.
-    """
     try:
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
@@ -92,24 +70,17 @@ def release_lock(lock):
     except Exception as e:
         logger.error(f"Error releasing lock: {e}")
 
-# Acquire lock at the start
 lock = acquire_lock()
-
-# Ensure lock is released on exit
 import atexit
 atexit.register(release_lock, lock)
 
 # ------------------- Database Initialization -------------------
 
 def init_permissions_db():
-    """
-    Initialize the permissions and removed_users tables.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         
-        # Create permissions table
         c.execute('''
             CREATE TABLE IF NOT EXISTS permissions (
                 user_id INTEGER PRIMARY KEY,
@@ -117,7 +88,6 @@ def init_permissions_db():
             )
         ''')
         
-        # Create removed_users table with group_id
         c.execute('''
             CREATE TABLE IF NOT EXISTS removed_users (
                 group_id INTEGER,
@@ -137,15 +107,11 @@ def init_permissions_db():
         raise
 
 def init_db():
-    """
-    Initialize the SQLite database and create necessary tables if they don't exist.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
-        conn.execute("PRAGMA foreign_keys = 1")  # Enable foreign key constraints
+        conn.execute("PRAGMA foreign_keys = 1")
         c = conn.cursor()
 
-        # Create groups table
         c.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY,
@@ -153,14 +119,12 @@ def init_db():
             )
         ''')
 
-        # Create bypass_users table
         c.execute('''
             CREATE TABLE IF NOT EXISTS bypass_users (
                 user_id INTEGER PRIMARY KEY
             )
         ''')
 
-        # Create deletion_settings table
         c.execute('''
             CREATE TABLE IF NOT EXISTS deletion_settings (
                 group_id INTEGER PRIMARY KEY,
@@ -169,7 +133,6 @@ def init_db():
             )
         ''')
 
-        # Create users table
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -183,7 +146,6 @@ def init_db():
         conn.close()
         logger.info("Database initialized successfully.")
         
-        # Initialize permissions-related tables
         init_permissions_db()
     except Exception as e:
         logger.error(f"Failed to initialize the database: {e}")
@@ -192,9 +154,6 @@ def init_db():
 # ------------------- Database Helper Functions -------------------
 
 def add_group(group_id):
-    """
-    Add a group by its chat ID.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -210,56 +169,42 @@ def add_group(group_id):
         raise
 
 def set_group_name(g_id, group_name):
-    """
-    Set the name of a group.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('UPDATE groups SET group_name = ? WHERE group_id = ?', (group_name, g_id))
         conn.commit()
         conn.close()
-        logger.info(f"Set group name for {g_id} to {group_name}")
+        logger.info(f"Set group name for {g_id} to '{group_name}'")
     except Exception as e:
         logger.error(f"Error setting group name for {g_id}: {e}")
         raise
 
 def group_exists(group_id):
-    """
-    Check if a group exists in the database.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('SELECT 1 FROM groups WHERE group_id = ?', (group_id,))
-        exists = c.fetchone() is not None
+        exists = (c.fetchone() is not None)
         conn.close()
-        logger.debug(f"Check if group {group_id} exists: {exists}")
         return exists
     except Exception as e:
         logger.error(f"Error checking existence of group {group_id}: {e}")
         return False
 
 def is_bypass_user(user_id):
-    """
-    Check if a user is in the bypass list.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (user_id,))
-        res = c.fetchone() is not None
+        res = (c.fetchone() is not None)
         conn.close()
-        logger.debug(f"Check if user {user_id} is bypassed: {res}")
         return res
     except Exception as e:
         logger.error(f"Error checking bypass status for user {user_id}: {e}")
         return False
 
 def add_bypass_user(user_id):
-    """
-    Add a user to the bypass list.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -272,10 +217,6 @@ def add_bypass_user(user_id):
         raise
 
 def remove_bypass_user(user_id):
-    """
-    Remove a user from the bypass list.
-    Returns True if removed, False if not found.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -294,9 +235,6 @@ def remove_bypass_user(user_id):
         return False
 
 def enable_deletion(group_id):
-    """
-    Enable message deletion for a specific group.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -313,9 +251,6 @@ def enable_deletion(group_id):
         raise
 
 def disable_deletion(group_id):
-    """
-    Disable message deletion for a specific group.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -332,57 +267,36 @@ def disable_deletion(group_id):
         raise
 
 def is_deletion_enabled(group_id):
-    """
-    Check if message deletion is enabled for a specific group.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (group_id,))
         row = c.fetchone()
         conn.close()
-        enabled = row[0] if row else False
-        logger.debug(f"Is deletion enabled for group {group_id}: {enabled}")
-        return bool(enabled)
+        return bool(row[0]) if row else False
     except Exception as e:
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
 
 def remove_user_from_removed_users(group_id, user_id):
-    """
-    Remove a user from the removed_users table for a specific group.
-    Returns True if row was deleted, False if not found.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        
-        # Debug: show all rows in removed_users prior
-        c.execute("SELECT group_id, user_id FROM removed_users")
-        all_rows = c.fetchall()
-        logger.debug(f"[remove_user_from_removed_users] Currently in removed_users: {all_rows}")
-
         c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
         changes = c.rowcount
         conn.commit()
         conn.close()
-
         if changes > 0:
             logger.info(f"Removed user {user_id} from removed_users for group {group_id}.")
             return True
         else:
-            logger.warning(
-                f"User {user_id} not in removed_users for group {group_id} (no rows deleted)."
-            )
+            logger.warning(f"User {user_id} not in removed_users for group {group_id}.")
             return False
     except Exception as e:
         logger.error(f"Error removing user {user_id} from group {group_id} in removed_users: {e}")
         return False
 
 def revoke_user_permissions(user_id):
-    """
-    Revoke all permissions for a user by setting their role to 'removed'.
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -395,11 +309,6 @@ def revoke_user_permissions(user_id):
         raise
 
 def list_removed_users(group_id=None):
-    """
-    Retrieve users from the removed_users table.
-      - If group_id is None, returns a list of tuples: (group_id, user_id, removal_reason, removal_time)
-      - Otherwise, returns (user_id, removal_reason, removal_time)
-    """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -432,23 +341,20 @@ delete_all_messages_after_removal = {}
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle private messages for:
-      1) Setting group names (after /group_add)
+      1) Setting group names after /group_add
       2) Toggling user provisions (after /provision)
       3) If we toggled Mute on, ask for minutes
     """
     user = update.effective_user
     message_text = (update.message.text or "").strip()
-    logger.debug(f"Received private message from {user.id}: {message_text}")
+    logger.debug(f"Private message from {user.id}: {message_text}")
 
-    # ----------------------------------
-    # FIX: Ensure only ALLOWED_USER_ID can set group name
-    # ----------------------------------
+    # Only allow ALLOWED_USER_ID to do anything
     if user.id != ALLOWED_USER_ID:
         logger.debug(f"Ignoring private message from non-admin user {user.id}")
         return
-    # ----------------------------------
 
-    # 1) If user is in the pending group_name flow
+    # --- 1) Setting group name
     if user.id in pending_group_names:
         group_id = pending_group_names.pop(user.id)
         group_name = message_text
@@ -463,9 +369,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 text=warning_message,
                 parse_mode='MarkdownV2'
             )
-            logger.warning(
-                f"User {user.id} gave an empty group name for group {group_id}"
-            )
+            logger.warning(f"User {user.id} gave an empty group name for group {group_id}")
             return
 
         try:
@@ -479,9 +383,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 text=confirmation_message,
                 parse_mode='MarkdownV2'
             )
-            logger.info(
-                f"Group name for {group_id} set to {group_name} by user {user.id}"
-            )
+            logger.info(f"Group name for {group_id} set to {group_name} by user {user.id}")
         except Exception as e:
             error_message = escape_markdown(
                 "⚠️ Failed to set group name. Please try `/group_add` again.",
@@ -495,84 +397,63 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Error setting group name for {group_id}: {e}")
         return
 
-    # 2) If user is toggling provisions
-    if user.id == ALLOWED_USER_ID:
-        for (grp, uid) in list(awaiting_mute_time.keys()):
-            if awaiting_mute_time[(grp, uid)]:
+    # --- 2) If we are toggling provisions or waiting for mute time
+    for (grp, uid) in list(awaiting_mute_time.keys()):
+        if awaiting_mute_time[(grp, uid)]:
+            try:
+                minutes = int(message_text)
+                logger.info(f"Muting user {uid} in group {grp} for {minutes} minutes.")
+                awaiting_mute_time.pop((grp, uid), None)
+                txt = escape_markdown(f"✅ Mute set for {minutes} minutes.", version=2)
+                await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+            except ValueError:
+                wr = escape_markdown("⚠️ Please enter a valid integer for minutes.", version=2)
+                await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
+            return
+
+    for key, p_dict in provisions_status.items():
+        (grp, uid) = key
+        if re.match(r'^[0-9 ]+$', message_text):
+            numbers = message_text.split()
+            toggled = []
+            for n in numbers:
                 try:
-                    minutes = int(message_text)
-                    # Dummy code: in a real scenario, you'd call context.bot.restrict_chat_member(...)
-                    logger.info(f"Muting user {uid} in group {grp} for {minutes} minutes.")
-                    awaiting_mute_time.pop((grp, uid), None)
-                    txt = escape_markdown(f"✅ Mute set for {minutes} minutes.", version=2)
-                    await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+                    n_int = int(n)
                 except ValueError:
-                    wr = escape_markdown("⚠️ Please enter a valid integer for minutes.", version=2)
-                    await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
-                return
+                    continue
+                if n_int in provision_labels:
+                    prev = p_dict.get(n_int, False)
+                    new_val = not prev
+                    p_dict[n_int] = new_val
+                    toggled.append(n_int)
+                    if (n_int == 1) and (new_val is True):
+                        awaiting_mute_time[(grp, uid)] = True
+                        txt = escape_markdown("Enter the *number of minutes* to mute:", version=2)
+                        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+            summary = "*Toggled:* \n"
+            for x in toggled:
+                status = "ENABLED" if p_dict[x] else "DISABLED"
+                summary += f"• {provision_labels[x]} -> {status}\n"
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=escape_markdown(summary, version=2),
+                parse_mode='MarkdownV2'
+            )
+            return
 
-        for key, p_dict in provisions_status.items():
-            (grp, uid) = key
-            if re.match(r'^[0-9 ]+$', message_text):
-                numbers = message_text.split()
-                toggled = []
-                for n in numbers:
-                    try:
-                        n_int = int(n)
-                    except:
-                        continue
-                    if n_int in provision_labels:
-                        prev = p_dict.get(n_int, False)
-                        new_val = not prev
-                        p_dict[n_int] = new_val
-                        toggled.append(n_int)
-                        if (n_int == 1) and (new_val is True):
-                            awaiting_mute_time[(grp, uid)] = True
-                            txt = escape_markdown(
-                                "Enter the *number of minutes* to mute:", 
-                                version=2
-                            )
-                            await context.bot.send_message(
-                                chat_id=user.id,
-                                text=txt,
-                                parse_mode='MarkdownV2'
-                            )
-                summary = "*Toggled:* \n"
-                for x in toggled:
-                    status = "ENABLED" if p_dict[x] else "DISABLED"
-                    summary += f"• {provision_labels[x]} -> {status}\n"
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=escape_markdown(summary, version=2),
-                    parse_mode='MarkdownV2'
-                )
-                return
-
-    logger.debug(f"No recognized conversation for private message: {message_text}")
+    logger.debug("No recognized action in private message.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /start - simple readiness check, only for the ALLOWED_USER_ID
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     try:
         msg = escape_markdown("✅ Bot is running and ready.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=msg,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"/start used by {user.id}")
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error in /start: {e}")
 
 async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /group_add <group_id> – register a group in the DB
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -590,7 +471,7 @@ async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if group_exists(g_id):
-        msg = escape_markdown("⚠️ Group already registered.", version=2)
+        msg = escape_markdown(f"⚠️ Group `{g_id}` already registered.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
@@ -598,27 +479,20 @@ async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_group(g_id)
         pending_group_names[user.id] = g_id
         confirmation = escape_markdown(
-            f"✅ Group `{g_id}` added.\nPlease send the group name in a private message to the bot.",
+            f"✅ Group `{g_id}` added.\n"
+            "Please send the group name in a private message to the bot now.",
             version=2
         )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation,
-            parse_mode='MarkdownV2'
-        )
+        await context.bot.send_message(chat_id=user.id, text=confirmation, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error adding group {g_id}: {e}")
         msg = escape_markdown("⚠️ Failed to add group. Please try again.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /rmove_group <group_id> – remove a group from registration
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/rmove_group <group_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -651,13 +525,9 @@ async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /bypass <user_id> – add a user to the bypass list
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/bypass <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -670,14 +540,12 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Already bypassed?
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (uid,))
         already = c.fetchone()
         conn.close()
-
         if already:
             msg = escape_markdown(f"⚠️ User `{uid}` is already bypassed.", version=2)
             await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -698,13 +566,9 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /unbypass <user_id> – remove user from bypass
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/unbypass <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -726,13 +590,9 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
 
 async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /show or /list – show all groups and their deletion settings
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -751,7 +611,6 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             g_name_esc = escape_markdown(g_name_display, version=2)
             msg += f"*Group:* {g_name_esc}\n*Group ID:* `{g_id}`\n"
 
-            # deletion setting
             try:
                 conn = sqlite3.connect(DATABASE)
                 c = conn.cursor()
@@ -764,55 +623,37 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += "⚠️ Error fetching deletion status.\n"
                 logger.error(f"Deletion status error for group {g_id}: {e}")
 
-        # Send in chunks if too long
         if len(msg) > 4000:
             for i in range(0, len(msg), 4000):
                 chunk = msg[i:i+4000]
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=chunk,
-                    parse_mode='MarkdownV2'
-                )
+                await context.bot.send_message(chat_id=user.id, text=chunk, parse_mode='MarkdownV2')
         else:
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=msg,
-                parse_mode='MarkdownV2'
-            )
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error showing groups: {e}")
         err_msg = escape_markdown("⚠️ Failed to get group list. Try again.", version=2)
         await context.bot.send_message(chat_id=user.id, text=err_msg, parse_mode='MarkdownV2')
 
 async def group_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /group_id – show the ID of the current group or the user’s ID if in private
-    """
     user = update.effective_user
-    chat = update.effective_chat
-
     if user.id != ALLOWED_USER_ID:
         return
 
+    chat = update.effective_chat
     if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         g_id = chat.id
         msg = escape_markdown(f"Group ID: `{g_id}`", version=2)
     else:
         msg = escape_markdown(f"Your User ID: `{user.id}`", version=2)
-
     try:
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error in /group_id: {e}")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /help – list available commands
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     help_text = """*Commands:*
 • `/start` – Check if the bot is running
 • `/group_add <group_id>` – Register a group by its chat ID
@@ -841,31 +682,23 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in /help: {e}")
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /info – show groups, bypassed users, etc.
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-
         c.execute('''
             SELECT g.group_id, g.group_name, ds.enabled
             FROM groups g
             LEFT JOIN deletion_settings ds ON g.group_id = ds.group_id
         ''')
         groups = c.fetchall()
-
         c.execute('SELECT user_id FROM bypass_users')
         bypassed = c.fetchall()
-
         conn.close()
 
-        msg = "*Bot Info:*\n\n"
-        msg += "*Groups:*\n"
+        msg = "*Bot Info:*\n\n*Groups:*\n"
         if groups:
             for g_id, g_name, enab in groups:
                 name_disp = g_name if g_name else "Name not set"
@@ -886,13 +719,9 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(msg) > 4000:
             for i in range(0, len(msg), 4000):
                 chunk = msg[i:i+4000]
-                await context.bot.send_message(
-                    chat_id=user.id, text=chunk, parse_mode='MarkdownV2'
-                )
+                await context.bot.send_message(chat_id=user.id, text=chunk, parse_mode='MarkdownV2')
         else:
-            await context.bot.send_message(
-                chat_id=user.id, text=msg, parse_mode='MarkdownV2'
-            )
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error in /info: {e}")
         er = escape_markdown("⚠️ Failed to retrieve info. Try again.", version=2)
@@ -901,14 +730,9 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- Additional Commands -------------------
 
 async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /provision <group_id> <user_id> – Show the user’s “provisions” or “actions” in numeric order
-    Then user can send the numbers in private chat to toggle them
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 2:
         txt = escape_markdown("⚠️ Usage: `/provision <group_id> <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
@@ -927,14 +751,10 @@ async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Initialize if not present
     if (g_id, u_id) not in provisions_status:
-        # By default, all are disabled
         provisions_status[(g_id, u_id)] = {k: False for k in provision_labels.keys()}
 
     p_dict = provisions_status[(g_id, u_id)]
-
-    # Build a display
     lines = [
         f"Provision list for user `{u_id}` in group `{g_id}`:",
         "Type the number(s) in *private chat* to toggle.",
@@ -950,13 +770,9 @@ async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /link <group_id> – create a single-use invite link for that group
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         txt = escape_markdown("⚠️ Usage: `/link <group_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
@@ -974,11 +790,10 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Attempt to create a single-use invite link
     try:
         link: ChatInviteLink = await context.bot.create_chat_invite_link(
             chat_id=g_id,
-            member_limit=1  # Single use
+            member_limit=1
         )
         txt = escape_markdown(f"Single\-use link created:\n{link.invite_link}", version=2)
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
@@ -990,13 +805,9 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- Commands to manage removed_users -------------------
 
 async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /add_removed_user <group_id> <user_id> – manually add a user to 'Removed Users'
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 2:
         msg = escape_markdown("⚠️ Usage: `/add_removed_user <group_id> <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -1047,13 +858,9 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
 
 async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /list_removed_users – list all users in the 'Removed Users' table
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     try:
         removed_data = list_removed_users()
         if not removed_data:
@@ -1061,7 +868,6 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
             return
 
-        # group them by group_id
         grouped = {}
         for g_id, u_id, reason, tstamp in removed_data:
             if g_id not in grouped:
@@ -1080,26 +886,18 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
         if len(output) > 4000:
             for i in range(0, len(output), 4000):
                 chunk = output[i:i+4000]
-                await context.bot.send_message(
-                    chat_id=user.id, text=chunk, parse_mode='MarkdownV2'
-                )
+                await context.bot.send_message(chat_id=user.id, text=chunk, parse_mode='MarkdownV2')
         else:
-            await context.bot.send_message(
-                chat_id=user.id, text=output, parse_mode='MarkdownV2'
-            )
+            await context.bot.send_message(chat_id=user.id, text=output, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error in /list_removed_users: {e}")
         msg = escape_markdown("⚠️ Failed to list removed users.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /unremove_user <group_id> <user_id> – remove user from 'Removed Users'
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 2:
         msg = escape_markdown("⚠️ Usage: `/unremove_user <group_id> <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -1121,7 +919,7 @@ async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     removed = remove_user_from_removed_users(g_id, u_id)
     if not removed:
         msg = escape_markdown(
-            f"⚠️ User `{u_id}` is not in the 'Removed Users' list for group `{g_id}`.",
+            f"⚠️ User `{u_id}` is not in 'Removed Users' for group `{g_id}`.",
             version=2
         )
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -1132,22 +930,13 @@ async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error revoking perms for user {u_id}: {e}")
 
-    cf = escape_markdown(
-        f"✅ User `{u_id}` removed from 'Removed Users' for group `{g_id}`.",
-        version=2
-    )
+    cf = escape_markdown(f"✅ User `{u_id}` removed from 'Removed Users' for group `{g_id}`.", version=2)
     await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
 
-# ------------------- Remove or forcibly ban user from group -------------------
-
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /rmove_user <group_id> <user_id> – forcibly remove user from group & table
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 2:
         msg = escape_markdown("⚠️ Usage: `/rmove_user <group_id> <user_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -1163,7 +952,6 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     remove_bypass_user(u_id)
     remove_user_from_removed_users(g_id, u_id)
-
     try:
         revoke_user_permissions(u_id)
     except Exception as e:
@@ -1192,38 +980,27 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- Deletion / Filtering Handlers -------------------
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Delete any message (including PDFs, images, etc.) if the text or caption has Arabic characters.
-    """
     msg = update.message
     if not msg:
         return
-
     user = msg.from_user
     g_id = msg.chat.id
-
     if not is_deletion_enabled(g_id):
         return
-
     if is_bypass_user(user.id):
         return
-
     text_or_caption = msg.text or msg.caption
-    if text_or_caption and has_arabic(text_or_caption):
+    if text_or_caption and re.search(r'[\u0600-\u06FF]', text_or_caption):
         try:
             await msg.delete()
-            logger.info(f"Deleted message with Arabic from user {user.id} in group {g_id}")
+            logger.info(f"Deleted Arabic message from user {user.id} in group {g_id}")
         except Exception as e:
             logger.error(f"Error deleting msg in group {g_id}: {e}")
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Delete any messages if the group is flagged after a removal for MESSAGE_DELETE_TIMEFRAME seconds.
-    """
     msg = update.message
     if not msg:
         return
-
     g_id = msg.chat.id
     if g_id in delete_all_messages_after_removal:
         try:
@@ -1233,9 +1010,6 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error(f"Failed to delete a flagged message in group {g_id}: {e}")
 
 # ------------------- Utility Functions -------------------
-
-def has_arabic(text):
-    return bool(re.search(r'[\u0600-\u06FF]', text))
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Error in the bot:", exc_info=context.error)
@@ -1248,25 +1022,19 @@ async def remove_deletion_flag_after_timeout(group_id):
 # ------------------- Commands to toggle Arabic deletion -------------------
 
 async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /be_sad <group_id> – enable deletion of Arabic messages
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/be_sad <group_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     try:
         g_id = int(context.args[0])
     except ValueError:
         msg = escape_markdown("⚠️ group_id must be integer.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     try:
         enable_deletion(g_id)
         cf = escape_markdown(f"✅ Arabic deletion enabled for group `{g_id}`.", version=2)
@@ -1277,25 +1045,19 @@ async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
 
 async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /be_happy <group_id> – disable deletion of Arabic messages
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/be_happy <group_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     try:
         g_id = int(context.args[0])
     except ValueError:
         msg = escape_markdown("⚠️ group_id must be integer.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     try:
         disable_deletion(g_id)
         cf = escape_markdown(f"✅ Arabic deletion disabled for group `{g_id}`.", version=2)
@@ -1308,30 +1070,23 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- Check Command -------------------
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /check <group_id> – verify 'Removed Users' vs. actual group membership
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
-
     if len(context.args) != 1:
         msg = escape_markdown("⚠️ Usage: `/check <group_id>`", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     try:
         g_id = int(context.args[0])
     except ValueError:
         msg = escape_markdown("⚠️ group_id must be integer.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
-
     if not group_exists(g_id):
         wr = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
         await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
         return
-
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -1343,7 +1098,6 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ef = escape_markdown("⚠️ DB error while fetching removed users.", version=2)
         await context.bot.send_message(chat_id=user.id, text=ef, parse_mode='MarkdownV2')
         return
-
     if not removed_list:
         msg = escape_markdown(f"⚠️ No removed users found for group `{g_id}`.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -1351,7 +1105,6 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     still_in = []
     not_in = []
-
     for uid in removed_list:
         try:
             member = await context.bot.get_chat_member(chat_id=g_id, user_id=uid)
@@ -1360,11 +1113,10 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 not_in.append(uid)
         except Exception as e:
-            logger.error(f"Error getting chat member: user={uid}, group={g_id}. {e}")
+            logger.error(f"Error getting chat member (group={g_id}, user={uid}): {e}")
             not_in.append(uid)
 
     resp = f"*Check Results for Group `{g_id}`:*\n\n"
-
     if still_in:
         resp += "*Users still in the group (despite being in removed list):*\n"
         for x in still_in:
@@ -1380,11 +1132,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resp += "\n"
 
     try:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=escape_markdown(resp, version=2),
-            parse_mode='MarkdownV2'
-        )
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(resp, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error sending check results: {e}")
         msg = escape_markdown("⚠️ Error sending check results.", version=2)
@@ -1401,9 +1149,6 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- main() -------------------
 
 def main():
-    """
-    Initialize DB and run the bot with all handlers.
-    """
     try:
         init_db()
     except Exception as e:
@@ -1444,28 +1189,17 @@ def main():
     app.add_handler(CommandHandler("unremove_user", unremove_user_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
 
-    # New commands
+    # Additional commands
     app.add_handler(CommandHandler("provision", provision_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
 
     # Message handlers
-    # 1) Delete if Arabic found in text or caption
-    app.add_handler(MessageHandler(
-        filters.TEXT | filters.CAPTION,
-        delete_arabic_messages
-    ))
-    # 2) Delete flagged
-    app.add_handler(MessageHandler(
-        filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-        delete_any_messages
-    ))
-    # 3) Private messages (handle group name, toggles, etc.)
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        handle_private_message
-    ))
+    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, delete_arabic_messages))
+    app.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+                                   delete_any_messages))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+                                   handle_private_message))
 
-    # Errors
     app.add_error_handler(error_handler)
 
     logger.info("Bot starting up...")
