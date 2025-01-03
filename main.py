@@ -43,7 +43,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------- Pending Actions -------------------
-
 # Dictionary to keep track of pending group names (for /group_add flow)
 pending_group_names = {}
 
@@ -330,14 +329,25 @@ def is_deletion_enabled(group_id):
 def remove_user_from_removed_users(group_id, user_id):
     """
     Remove a user from the removed_users table for a specific group.
+    Returns True if the row was deleted, False if not found.
+    
+    Debug logs added to list all rows in removed_users before deletion.
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
+
+        # Debug: show all rows before trying to remove
+        c.execute('SELECT group_id, user_id FROM removed_users')
+        all_removed = c.fetchall()
+        logger.debug(f"Before removal, removed_users table has: {all_removed}")
+
+        # Attempt removal
         c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
         changes = c.rowcount
         conn.commit()
         conn.close()
+
         if changes > 0:
             logger.info(f"Removed user {user_id} from removed_users list for group {group_id}.")
             return True
@@ -367,18 +377,20 @@ def list_removed_users(group_id=None):
     """
     Retrieve all users from the removed_users table.
     If group_id is provided, filter by that group.
-    Returns a list of tuples containing (group_id, user_id, removal_reason, removal_time) or 
-    (user_id, removal_reason, removal_time) depending on usage.
+    Returns a list of tuples:
+      - If group_id is None: (group_id, user_id, removal_reason, removal_time)
+      - If group_id is set:  (user_id, removal_reason, removal_time)
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         if group_id:
-            # Return user_id, removal_reason, removal_time
-            c.execute('SELECT user_id, removal_reason, removal_time FROM removed_users WHERE group_id = ?', (group_id,))
+            c.execute(
+                'SELECT user_id, removal_reason, removal_time FROM removed_users WHERE group_id = ?',
+                (group_id,)
+            )
             users = c.fetchall()
         else:
-            # Return group_id, user_id, removal_reason, removal_time
             c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
             users = c.fetchall()
         conn.close()
@@ -1038,6 +1050,16 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
         return
 
+    # (Optional) Debug: check what's in removed_users before
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT group_id, user_id FROM removed_users')
+        logger.debug(f"Before add_removed_user, removed_users table has: {c.fetchall()}")
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error listing removed_users for debugging: {e}")
+
     # Check if user is already in removed_users list for the group
     try:
         conn = sqlite3.connect(DATABASE)
@@ -1045,7 +1067,10 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
         if c.fetchone():
             conn.close()
-            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the 'Removed Users' list for group `{group_id}`.", version=2)
+            message = escape_markdown(
+                f"⚠️ User `{target_user_id}` is already in the 'Removed Users' list for group `{group_id}`.",
+                version=2
+            )
             await context.bot.send_message(
                 chat_id=user.id,
                 text=message,
@@ -1074,6 +1099,7 @@ async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         ''', (group_id, target_user_id, "Manually added via /add_removed_user"))
         conn.commit()
         conn.close()
+
         confirmation_message = escape_markdown(
             f"✅ Added user `{target_user_id}` to the 'Removed Users' list for group `{group_id}`.",
             version=2
@@ -1233,7 +1259,7 @@ async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         revoke_user_permissions(target_user_id)
     except Exception as e:
         logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
-        # Not critical to block the flow here
+        # Not critical to block flow
 
     # Send confirmation
     confirmation_message = escape_markdown(
@@ -1339,7 +1365,11 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.ban_chat_member(chat_id=group_id, user_id=target_user_id)
         logger.info(f"Removed user {target_user_id} from group {group_id} via bot.")
     except Exception as e:
-        message = escape_markdown(f"⚠️ Failed to remove user `{target_user_id}` from group `{group_id}`. Ensure the bot has the necessary permissions.", version=2)
+        message = escape_markdown(
+            f"⚠️ Failed to remove user `{target_user_id}` from group `{group_id}`. "
+            f"Ensure the bot has the necessary permissions.",
+            version=2
+        )
         await context.bot.send_message(
             chat_id=user.id,
             text=message,
@@ -1357,7 +1387,8 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send confirmation to the authorized user privately
     confirmation_message = escape_markdown(
-        f"✅ Removed user `{target_user_id}` from group `{group_id}` and from 'Removed Users' in permissions.\nAny messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
+        f"✅ Removed user `{target_user_id}` from group `{group_id}` and from 'Removed Users' in permissions.\n"
+        f"Any messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
         version=2
     )
     try:
@@ -1366,7 +1397,9 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=confirmation_message,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id} and permissions.")
+        logger.info(
+            f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id} and permissions."
+        )
     except Exception as e:
         logger.error(f"Error sending confirmation message for /rmove_user: {e}")
 
