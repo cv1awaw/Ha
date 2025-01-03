@@ -38,15 +38,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ------------------- Pending Actions -------------------
+# ------------------- "Awaiting" Dictionaries -------------------
 
-pending_group_names = {}  # { ALLOWED_USER_ID: group_id to set name for }
-provisions_status = {}     # { (group_id, user_id): { provision_num: bool, ... } }
-awaiting_mute_time = {}    # { (group_id, user_id): True if waiting for mute minutes }
+# 1) For waiting on a new group name:
+pending_group_names = {}         # { user_id: group_id }
 
-# We’ll rely on this to see if we’re "awaiting toggles"
-# but we already store toggles in `provisions_status`, so we just detect numeric input.
-# The presence of an entry in `provisions_status` means we can interpret numeric toggles.
+# 2) For waiting on toggling user provisions:
+awaiting_provision = {}          # { user_id: (group_id, user_id_being_provisioned) }
+
+# 3) The dictionary that stores actual toggles:
+provisions_status = {}           # { (group_id, target_user): {1: bool, 2: bool, ...} }
+
+# 4) If the user toggles "Mute" (item #1) to ENABLED, we can wait for minutes:
+awaiting_mute_time = {}          # { (group_id, user_id): True }
 
 provision_labels = {
     1:  "Mute",
@@ -361,9 +365,9 @@ delete_all_messages_after_removal = {}
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle ANY message in private chat:
-      1) Setting group names after /group_add
-      2) Toggling user provisions (after /provision)
-      3) If toggled Mute, ask for minutes
+      - If user is waiting to set a group name, store that name
+      - If user is waiting to provision toggles, parse numbers
+      - If user toggles Mute=ON, then ask for minutes
     """
     user = update.effective_user
     message_text = (update.message.text or "").strip()
@@ -404,46 +408,73 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Error setting group name for {g_id}: {e}")
         return
 
-    # --- 2) If we are toggling provisions or waiting for mute time ---
-    # 2a) If we are currently waiting for "mute minutes"...
-    for (grp, uid) in list(awaiting_mute_time.keys()):
-        if awaiting_mute_time[(grp, uid)]:
+    # --- 2) If user is about to toggle provisions for someone ---
+    if user.id in awaiting_provision:
+        (grp, uid) = awaiting_provision[user.id]
+        # Also check if we are waiting for "mute time" specifically:
+        if (grp, uid) in awaiting_mute_time and awaiting_mute_time[(grp, uid)]:
+            # The next message is presumably the # of minutes
             try:
                 minutes = int(message_text)
-                logger.info(f"Muting user {uid} in group {grp} for {minutes} minutes.")
+                # You could do an actual "mute" call or record it somewhere
+                logger.info(f"Muting user {uid} in group {grp} for {minutes} minutes (not implemented).")
                 awaiting_mute_time.pop((grp, uid), None)
-                txt = escape_markdown(f"✅ Mute set for {minutes} minutes.", version=2)
+                txt = escape_markdown(f"✅ Mute set for {minutes} minutes (pretend).", version=2)
                 await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+                return
             except ValueError:
                 wr = escape_markdown("⚠️ Please enter a valid integer for minutes.", version=2)
                 await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
-            return
+                return
 
-    # 2b) If the user typed some numbers, toggle them
-    #    We look for an existing "provisions_status[(grp, uid)]" that was created by /provision
-    #    and see if the user is sending numeric toggles.
-    numeric_message = re.match(r'^[0-9 ]+$', message_text)
-    if numeric_message:
-        # Find if there's exactly one (g_id, u_id) we last "provisioned" for
-        # but we actually store them all in a dict. We don’t have a direct “awaiting” dict,
-        # but we can check which (grp, uid) was last commanded. Alternatively, we can keep
-        # a separate mapping from user.id -> (grp, uid) if you want only one active provisioning
-        # at a time. Let's do that for clarity:
-        # We'll search for EXACTLY one item in provisions_status that you last used /provision for
-        # or we can store a separate dict: "awaiting_provision[user_id] = (grp, uid)".
-        # We'll do it the simpler way: see which one might be "fresh." But your code stored them in
-        # the same dictionary. Let's introduce a new dictionary for clarity:
+        # If the message is numeric toggles, e.g. "3", "1 2", etc.:
+        if re.match(r'^[0-9 ]+$', message_text):
+            nums = message_text.split()
+            p_dict = provisions_status.get((grp, uid), {})
+            toggled_list = []
+            for n_str in nums:
+                try:
+                    n_int = int(n_str)
+                except ValueError:
+                    continue
+                if n_int in p_dict:
+                    new_val = not p_dict[n_int]
+                    p_dict[n_int] = new_val
+                    toggled_list.append(n_int)
+                    # If it's Mute turned ON, ask for minutes next:
+                    if (n_int == 1) and new_val:
+                        awaiting_mute_time[(grp, uid)] = True
+                        prompt = escape_markdown(
+                            "Enter the *number of minutes* to mute:",
+                            version=2
+                        )
+                        await context.bot.send_message(chat_id=user.id, text=prompt, parse_mode='MarkdownV2')
 
-        # This user might have multiple ongoing? Usually you do a single at once, so let's find
-        # the one that was just created. We can do a quick check:
-        # For example, in /provision_cmd, we do: "awaiting_provision[user.id] = (g_id, u_id)"
-        # Then in handle_private_message, we see if user.id is in awaiting_provision.
-        # We'll do that approach.
+            # Summarize toggles
+            if toggled_list:
+                summary = "*Toggled:* \n"
+                for x in toggled_list:
+                    state = "ENABLED" if p_dict[x] else "DISABLED"
+                    summary += f"• {provision_labels[x]} -> {state}\n"
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=escape_markdown(summary, version=2),
+                    parse_mode='MarkdownV2'
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="⚠️ No valid toggles found.",
+                    parse_mode='MarkdownV2'
+                )
+        else:
+            # Not numeric => prompt again
+            err_msg = escape_markdown("⚠️ Please enter number(s), e.g. `1 2`", version=2)
+            await context.bot.send_message(chat_id=user.id, text=err_msg, parse_mode='MarkdownV2')
+        return
 
-        pass  # We'll do the approach below if we store the "awaiting_provision" dict.
-
+    # If no recognized state, do nothing
     logger.debug("No recognized pending action in private message.")
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -456,6 +487,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in /start: {e}")
 
 async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/group_add <group_id> -> add group in DB, then wait for user to send group name in private."""
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -479,10 +511,11 @@ async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         add_group(g_id)
-        # Instead of asking for name immediately, store in dict that we're waiting for a name
+        # store that we are waiting for the group name
         pending_group_names[user.id] = g_id
         confirmation = escape_markdown(
-            f"✅ Group `{g_id}` added.\nPlease send the group name **in a private message** to me now.",
+            f"✅ Group `{g_id}` added.\n"
+            "Please send the group name **in a private message** to me now.",
             version=2
         )
         await context.bot.send_message(chat_id=user.id, text=confirmation, parse_mode='MarkdownV2')
@@ -732,6 +765,10 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------- Additional Commands -------------------
 
 async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /provision <group_id> <user_id> -> show toggles, then wait in private chat 
+    for numeric input to toggle them.
+    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -753,21 +790,21 @@ async def provision_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Initialize a fresh dictionary of toggles if we haven't yet
     if (g_id, u_id) not in provisions_status:
-        provisions_status[(g_id, u_id)] = {k: False for k in provision_labels.keys()}
+        provisions_status[(g_id, u_id)] = {k: False for k in provision_labels}
+
+    # Mark that we are now awaiting numeric toggles from this admin user
+    awaiting_provision[user.id] = (g_id, u_id)
 
     p_dict = provisions_status[(g_id, u_id)]
     lines = [
         f"Provision list for user `{u_id}` in group `{g_id}`:",
-        "Type the number(s) in *private chat* to toggle.",
-        ""
+        "Type the number(s) in *private chat* to toggle.\n"
     ]
     for num, label in provision_labels.items():
-        status = "ENABLED" if p_dict.get(num) else "DISABLED"
-        lines.append(f"{num}) {label} -> {status}")
-    lines.append("")
-    lines.append("Example: Type `1 2` in private chat to toggle Mute and Kick.")
+        state = "ENABLED" if p_dict[num] else "DISABLED"
+        lines.append(f"{num}) {label} -> {state}")
+    lines.append("\nExample: Type `1 2` in private chat to toggle Mute and Kick.")
 
     msg = escape_markdown("\n".join(lines), version=2)
     await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
@@ -872,20 +909,16 @@ async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         grouped = {}
-        # In DB, we store: group_id, user_id, removal_reason, removal_time
-        # or user_id, removal_reason, removal_time if group_id is given
         for row in removed_data:
+            # row might be (group_id, user_id, reason, time) or (user_id, reason, time)
             if len(row) == 4:
-                g_id, u_id, reason, tstamp = row
+                (g_id, u_id, reason, tstamp) = row
+            elif len(row) == 3:
+                (u_id, reason, tstamp) = row
+                g_id = -999999999  # unknown
             else:
-                # Possibly user_id, reason, tstamp if group_id was specified
-                # but let's handle the general case
-                if len(row) == 3:
-                    u_id, reason, tstamp = row
-                    # If group_id is not in the row, that's from a partial
-                    g_id = -999999999  # dummy
-                else:
-                    continue
+                continue
+
             if g_id not in grouped:
                 grouped[g_id] = []
             grouped[g_id].append((u_id, reason, tstamp))
@@ -1219,7 +1252,8 @@ def main():
                        delete_any_messages)
     )
 
-    # 3) Capture *all* messages in private chat (so we truly "wait" for user input)
+    # 3) Capture *all* messages in private chat
+    # This ensures we "wait" for the user's next message after /group_add or /provision:
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE, handle_private_message)
     )
