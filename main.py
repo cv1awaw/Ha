@@ -43,10 +43,27 @@ logger = logging.getLogger(__name__)
 pending_group_names = {}  # { ALLOWED_USER_ID: group_id }
 provisions_status = {}  
 awaiting_mute_time = {}  
+
+# -- Updated dictionary to list all toggles seen in your screenshots --
 provision_labels = {
     1: "Mute",
     2: "Kick",
-    3: "Send Photos"
+    3: "Send Messages",
+    4: "Send Photos",
+    5: "Send Videos",
+    6: "Send Files",
+    7: "Send Music",
+    8: "Send Voice Messages",
+    9: "Send Video Messages",
+    10: "Send Stickers",
+    11: "Send GIFs",
+    12: "Send Games",
+    13: "Send Inline Bots",
+    14: "Send Polls",
+    15: "Embed Links",
+    16: "Add Users",
+    17: "Pin Messages",
+    18: "Change Chat Info"
 }
 
 # ------------------- Lock Mechanism -------------------
@@ -413,6 +430,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
     for key, p_dict in provisions_status.items():
         (grp, uid) = key
+        # If user typed numbers, toggle them
         if re.match(r'^[0-9 ]+$', message_text):
             numbers = message_text.split()
             toggled = []
@@ -426,14 +444,18 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                     new_val = not prev
                     p_dict[n_int] = new_val
                     toggled.append(n_int)
+
+                    # If new_val is True and this is Mute (#1), ask for minutes
                     if (n_int == 1) and (new_val is True):
                         awaiting_mute_time[(grp, uid)] = True
                         txt = escape_markdown("Enter the *number of minutes* to mute:", version=2)
                         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
+
             summary = "*Toggled:* \n"
             for x in toggled:
                 status = "ENABLED" if p_dict[x] else "DISABLED"
                 summary += f"• {provision_labels[x]} -> {status}\n"
+
             await context.bot.send_message(
                 chat_id=user.id,
                 text=escape_markdown(summary, version=2),
@@ -673,7 +695,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
 • `/check <group_id>` – Validate 'Removed Users' vs. actual membership
 • `/provision <group_id> <user_id>` – Toggle user’s “permissions” or “actions”
-• `/link <group_id>` – Create a single\-use invite link
+• `/link <group_id>` – Create a single-use invite link
 """
     try:
         help_esc = escape_markdown(help_text, version=2)
@@ -795,7 +817,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=g_id,
             member_limit=1
         )
-        txt = escape_markdown(f"Single\-use link created:\n{link.invite_link}", version=2)
+        txt = escape_markdown(f"Single-use link created:\n{link.invite_link}", version=2)
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error creating invite link for group {g_id}: {e}")
