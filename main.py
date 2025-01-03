@@ -41,10 +41,9 @@ logger = logging.getLogger(__name__)
 # ------------------- Pending Actions -------------------
 
 pending_group_names = {}  # { ALLOWED_USER_ID: group_id }
-provisions_status = {}  
-awaiting_mute_time = {}  
+provisions_status = {}
+awaiting_mute_time = {}
 
-# -- Updated dictionary to list all toggles seen in your screenshots --
 provision_labels = {
     1: "Mute",
     2: "Kick",
@@ -1215,12 +1214,14 @@ def main():
     app.add_handler(CommandHandler("provision", provision_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
 
-    # Message handlers
+    # Message handlers:
+    # 1) Delete Arabic text in groups (if enabled)
     app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, delete_arabic_messages))
+    # 2) Delete all messages in a group if within the removal timeframe
     app.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
                                    delete_any_messages))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-                                   handle_private_message))
+    # 3) Capture *all* messages in private chat (fix: removed `~filters.COMMAND`)
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, handle_private_message))
 
     app.add_error_handler(error_handler)
 
