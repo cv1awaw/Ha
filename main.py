@@ -58,7 +58,7 @@ MESSAGE_DELETE_TIMEFRAME = 15
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to DEBUG for highly detailed output
+    level=logging.INFO  # Change to DEBUG for more detailed output
 )
 logger = logging.getLogger(__name__)
 
@@ -424,9 +424,14 @@ delete_all_messages_after_removal = {}
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle a follow-up message from the user to set group name (originally intended for private chat).
+    Handle the user’s follow-up message to set the group name (originally intended for private).
+    Now it works in any chat so you can reply with the group name right where you are.
     """
     user = update.effective_user
+    # Ensure only the ALLOWED_USER_ID can set group names
+    if user.id != ALLOWED_USER_ID:
+        return
+
     message_text = (update.message.text or "").strip()
     logger.debug(f"Received message from {user.id}: {message_text}")
 
@@ -1431,7 +1436,8 @@ def main():
         delete_any_messages
     ))
 
-    # 3) (FIX) Remove the & filters.ChatType.PRIVATE so that your reply is processed:
+    # 3) The crucial fix: allow any non-command text to trigger handle_private_message  
+    #    (so the group name works in group chat or private)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_private_message
