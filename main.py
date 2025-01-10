@@ -424,7 +424,7 @@ delete_all_messages_after_removal = {}
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle messages (previously private only) to set group name after /group_add.
+    Handle messages to set group name after /group_add (originally private-only, now for any chat).
     """
     user = update.effective_user
     message_text = (update.message.text or "").strip()
@@ -756,6 +756,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
 • `/check <group_id>` – Validate 'Removed Users' vs actual group membership
 • `/link <group_id>` – Create a one\-time\-use invite link (private only)
+• `/love <group_id> <user_id>` – *Remove user from 'Removed Users' (like unremove)* 
 """
     try:
         help_esc = escape_markdown(help_text, version=2)
@@ -970,6 +971,55 @@ async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cf = escape_markdown(
         f"✅ User `{u_id}` removed from 'Removed Users' for group `{g_id}`.",
+        version=2
+    )
+    await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
+
+# ------------------- NEW /love Command -------------------
+
+async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /love <group_id> <user_id> – remove user from 'Removed Users' (similar to unremove_user)
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 2:
+        msg = escape_markdown("⚠️ Usage: `/love <group_id> <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
+    except ValueError:
+        msg = escape_markdown("⚠️ Both group_id and user_id must be integers.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        warn = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
+        return
+
+    removed = remove_user_from_removed_users(g_id, u_id)
+    if not removed:
+        msg = escape_markdown(
+            f"⚠️ User `{u_id}` is not in 'Removed Users' for group `{g_id}`.",
+            version=2
+        )
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
+
+    # Optionally revoke user perms just like unremove_user
+    try:
+        revoke_user_permissions(u_id)
+    except Exception as e:
+        logger.error(f"Error revoking perms for user {u_id}: {e}")
+
+    cf = escape_markdown(
+        f"✅ Loved user `{u_id}` back into group `{g_id}` (removed from 'Removed Users').",
         version=2
     )
     await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
@@ -1418,6 +1468,9 @@ def main():
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("link", link_cmd))  # one-time link
 
+    # <-- NEW /love command added -->
+    app.add_handler(CommandHandler("love", love_cmd))
+
     # Message Handlers
     # 1) Check Arabic in text/caption/PDF/image
     app.add_handler(MessageHandler(
@@ -1431,7 +1484,7 @@ def main():
         delete_any_messages
     ))
 
-    # 3) **Removed the "filters.ChatType.PRIVATE" requirement** so name can be sent from any chat
+    # 3) Remove the & filters.ChatType.PRIVATE so you can send the group name from any chat
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_private_message
