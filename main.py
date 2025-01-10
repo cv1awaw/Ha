@@ -12,7 +12,6 @@ import tempfile
 
 # -------------------------------------------------------------------------------------
 # OPTIONAL / CONDITIONAL IMPORTS FOR PDF & IMAGE TEXT EXTRACTION
-# If not installed, we skip that functionality to avoid crashes.
 # -------------------------------------------------------------------------------------
 pdf_available = True
 try:
@@ -425,6 +424,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/love <group_id> <user_id>` – Remove a user from 'Removed Users'.\n"
         "• `/rmove_user <group_id> <user_id>` – Forcibly remove user from group.\n"
         "• `/mute <group_id> <user_id> <minutes>` – Mute user.\n"
+        "• `/unmute <group_id> <user_id>` – Remove mute from user.\n"
         "• `/limit <group_id> <user_id> <permission_type> <on/off>` – Toggle user permission.\n"
         "• `/slow <group_id> <seconds>` – Placeholder for slow mode.\n"
         "• `/be_sad <group_id>` – Enable Arabic deletion in the group.\n"
@@ -433,10 +433,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/link <group_id>` – Create a one-time invite link.\n"
         "• `/permission_type` – Show valid `<permission_type>` values for `/limit`.\n"
         "\n"
-        "*Additional Info:*\n"
-        "• After `/group_add <group_id>`, send the group name in a direct message.\n"
-        "• Permissions are toggled via `/limit`, e.g. `/limit <group_id> <user_id> photos off`.\n"
-        "• The user ID must be an integer, and you must be the ALLOWED_USER_ID to use these commands."
+        "*Important:* The bot must be an *admin* in the group with \"can restrict members\" permission\n"
+        "in order to actually apply mutes and /limit restrictions.\n"
     )
     await context.bot.send_message(
         chat_id=user.id,
@@ -714,8 +712,54 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error muting user {u_id} in {g_id}: {e}")
-        err = "⚠️ Could not mute. Check bot’s admin rights & logs."
+        err = "⚠️ Could not mute. Make sure the bot is an admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+# ------------------- /unmute Command -------------------
+async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /unmute <group_id> <user_id> – remove the user's mute (allow sending messages again)
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 2:
+        msg = "⚠️ Usage: `/unmute <group_id> <user_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
+    except ValueError:
+        w = "⚠️ group_id, user_id must be integers."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        ef = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(ef, version=2), parse_mode='MarkdownV2')
+        return
+
+    # We'll restore "everything" to True (like they're not restricted).
+    perms = ChatPermissions(
+        can_send_messages=True,
+        can_send_media_messages=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True
+    )
+
+    try:
+        await context.bot.restrict_chat_member(chat_id=g_id, user_id=u_id, permissions=perms)
+        cf = f"✅ Unmuted user `{u_id}` in group `{g_id}` (they can send messages again)."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error unmuting user {u_id} in group {g_id}: {e}")
+        err = "⚠️ Could not unmute. Make sure the bot is admin with can_restrict_members."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
 
 # ------------------- The list of recognized permission_types -------------------
 VALID_PERMISSION_TYPES = [
@@ -807,11 +851,18 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.restrict_chat_member(chat_id=g_id, user_id=u_id, permissions=perms)
-        msg = f"✅ Set permission '{p_type}' to '{toggle}' for `{u_id}` in group `{g_id}`."
+        msg = (
+            f"✅ Set permission '{p_type}' to '{toggle}' for `{u_id}` in group `{g_id}`.\n\n"
+            "If it doesn't actually restrict them, ensure the bot is an admin\n"
+            "with 'can restrict members' permission in that group."
+        )
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error limiting perms for {u_id} in {g_id}: {e}")
-        err = "⚠️ Could not limit permission. Check bot’s admin rights & logs."
+        err = (
+            "⚠️ Could not limit permission. Ensure the bot is admin with can_restrict_members.\n"
+            "Check logs for details."
+        )
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
 async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -862,7 +913,8 @@ async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"{types_list}\n\n"
         "Example usage:\n"
         "`/limit <group_id> <user_id> photos off`\n\n"
-        "This disallows that user from sending **photos** in the group."
+        "This disallows that user from sending **photos** in the group.\n\n"
+        "Remember: The bot must be an admin with can_restrict_members for this to work."
     )
 
     await context.bot.send_message(
@@ -913,7 +965,8 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                             reader = PyPDF2.PdfReader(pdf_file)
                             all_text = ""
                             for page in reader.pages:
-                                all_text += page.extract_text() or ""
+                                page_text = page.extract_text() or ""
+                                all_text += page_text
                             if has_arabic(all_text):
                                 await msg.delete()
                                 logger.info(f"Deleted PDF with Arabic from user {user.id} in {chat_id}.")
@@ -1083,7 +1136,6 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for uid in removed_list:
         try:
             member = await context.bot.get_chat_member(chat_id=g_id, user_id=uid)
-            # member.status can be "member", "administrator", "creator", "left", or "kicked"
             if member.status in ALLOWED_STATUSES:
                 still_in.append(uid)
             else:
@@ -1107,7 +1159,6 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(resp, version=2), parse_mode='MarkdownV2')
 
-    # optionally ban them
     for x in still_in:
         try:
             await context.bot.ban_chat_member(chat_id=g_id, user_id=x)
@@ -1190,14 +1241,14 @@ def main():
     app.add_handler(CommandHandler("love", love_cmd))
     app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
+    app.add_handler(CommandHandler("unmute", unmute_cmd))    # <-- NEW unmute command
     app.add_handler(CommandHandler("limit", limit_cmd))
     app.add_handler(CommandHandler("slow", slow_cmd))
     app.add_handler(CommandHandler("be_sad", be_sad_cmd))
     app.add_handler(CommandHandler("be_happy", be_happy_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
-
-    # NEW: /permission_type command
+    # /permission_type command
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
 
     # Message Handlers
@@ -1217,7 +1268,7 @@ def main():
     # Global error handler
     app.add_error_handler(error_handler)
 
-    logger.info("Bot starting up (with /permission_type command).")
+    logger.info("Bot starting up (with /unmute and improved /limit).")
     app.run_polling()
 
 if __name__ == "__main__":
