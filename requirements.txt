@@ -1,2 +1,9 @@
-python-telegram-bot==20.3
-Flask==2.2.5
+# For Telegram bot functionality:
+python-telegram-bot==20.2
+
+# For PDF text extraction:
+PyPDF2==3.0.1
+
+# For OCR on images:
+pytesseract==0.3.10
+Pillow==9.4.0
