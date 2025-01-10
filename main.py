@@ -32,7 +32,6 @@ except ImportError:
 from telegram import (
     Update,
     ChatPermissions,
-    ChatMemberStatus,
     ChatType,
 )
 from telegram.ext import (
@@ -47,17 +46,21 @@ from telegram.helpers import escape_markdown
 # ------------------- Configuration -------------------
 
 DATABASE = 'warnings.db'
-ALLOWED_USER_ID = 6177929931  # Change to your actual authorized user ID
+ALLOWED_USER_ID = 6177929931  # Change to your personal Telegram user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'
 MESSAGE_DELETE_TIMEFRAME = 15
 
-# ------------------- Logging -------------------
+# ------------------- Logging Setup -------------------
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ------------------- Some constants for user statuses -------------------
+# Since we can't import ChatMemberStatus, we'll compare member.status to these strings:
+ALLOWED_STATUSES = ("member", "administrator", "creator")
 
 # ------------------- Pending group name dict -------------------
 
@@ -67,20 +70,20 @@ pending_group_names = {}
 
 def acquire_lock():
     """
-    Acquire a lock so only one instance can run at a time.
+    Acquire an exclusive lock, ensuring only one instance of this bot runs at a time.
     """
     try:
         lock_file = open(LOCK_FILE, 'w')
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        logger.info("Lock acquired. This is the only running instance.")
+        logger.info("Lock acquired. Only one instance running.")
         return lock_file
     except IOError:
         logger.error("Another instance of this bot is already running. Exiting.")
-        sys.exit("Another instance of this bot is already running.")
+        sys.exit("Another instance is already running.")
 
 def release_lock(lock_file):
     """
-    Release the lock at exit.
+    Release the file lock at exit.
     """
     try:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
@@ -91,7 +94,6 @@ def release_lock(lock_file):
         logger.error(f"Error releasing lock: {e}")
 
 lock_file = acquire_lock()
-
 import atexit
 atexit.register(release_lock, lock_file)
 
@@ -99,21 +101,17 @@ atexit.register(release_lock, lock_file)
 
 def init_permissions_db():
     """
-    Initialize the 'permissions' and 'removed_users' tables.
+    Initialize 'permissions' and 'removed_users' tables.
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        
-        # Create permissions table
         c.execute('''
             CREATE TABLE IF NOT EXISTS permissions (
                 user_id INTEGER PRIMARY KEY,
                 role TEXT NOT NULL
             )
         ''')
-
-        # Create removed_users table
         c.execute('''
             CREATE TABLE IF NOT EXISTS removed_users (
                 group_id INTEGER,
@@ -124,7 +122,6 @@ def init_permissions_db():
                 FOREIGN KEY (group_id) REFERENCES groups(group_id)
             )
         ''')
-
         conn.commit()
         conn.close()
         logger.info("Permissions and Removed Users tables initialized successfully.")
@@ -177,7 +174,7 @@ def init_db():
         
         init_permissions_db()
     except Exception as e:
-        logger.error(f"Failed to initialize the database: {e}")
+        logger.error(f"Failed to initialize DB: {e}")
         raise
 
 # ------------------- Database Helper Functions -------------------
@@ -242,7 +239,7 @@ def is_bypass_user(user_id):
         conn.close()
         return bool(found)
     except Exception as e:
-        logger.error(f"Error checking bypass for {user_id}: {e}")
+        logger.error(f"Error checking bypass for user {user_id}: {e}")
         return False
 
 def add_bypass_user(user_id):
@@ -512,7 +509,7 @@ async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Failed to remove group. Check logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
 
-# ---------- Removing /unremove_user entirely, as requested ----------
+# ---------- Removing /unremove_user entirely, as you requested ----------
 
 async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -626,7 +623,6 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    from telegram import ChatPermissions
     until_date = datetime.utcnow() + timedelta(minutes=minutes)
     perms = ChatPermissions(can_send_messages=False)
 
@@ -650,12 +646,11 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
       /limit -10012345 999999 photos off
     means disallow user from sending photos in that group.
 
-    **Possible <permission_type> values** might be:
+    **Possible <permission_type> values**:
     text, photos, videos, stickers, gifs, music, voice, video_messages,
     inlinebots, embed_links, polls, games, etc.
 
-    This is a simplified approach that re-applies all permissions each time. 
-    For real usage, you'd track partial perms in the DB.
+    We'll re-apply perms each time (simple approach).
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
@@ -663,7 +658,8 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) != 4:
         msg = ("⚠️ Usage: `/limit <group_id> <user_id> <permission_type> <on/off>`\n\n"
-               "Examples of <permission_type>: text, photos, videos, stickers, polls, etc.")
+               "e.g. /limit -10012345 999999 photos off\n"
+               "Possible <permission_type>: text, photos, videos, stickers, polls, etc.")
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
         return
 
@@ -682,14 +678,12 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # We'll do a simple approach: start with all True, then turn some off if toggle=off.
     can_send_messages = True
     can_send_media_messages = True
     can_send_polls = True
     can_send_other_messages = True
     can_add_web_page_previews = True
 
-    # Based on p_type, we flip the relevant permission
     def off():
         return toggle == "off"
 
@@ -710,11 +704,10 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             can_send_messages = False
 
     else:
-        wr = "⚠️ Unknown permission_type. Try 'stickers', 'photos', 'text', 'polls', etc."
+        wr = "⚠️ Unknown permission_type. Try 'text', 'photos', 'videos', 'stickers', 'polls', etc."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    from telegram import ChatPermissions
     perms = ChatPermissions(
         can_send_messages=can_send_messages,
         can_send_media_messages=can_send_media_messages,
@@ -728,7 +721,7 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f"✅ Set permission '{p_type}' to '{toggle}' for `{u_id}` in group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error limiting perms for {u_id} in group {g_id}: {e}")
+        logger.error(f"Error limiting perms for {u_id} in {g_id}: {e}")
         err = "⚠️ Could not limit permission. Check bot’s admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
@@ -736,8 +729,8 @@ async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /slow <group_id> <delay_in_seconds>
 
-    Telegram Bot API doesn't officially allow changing slow mode as of now.
-    We'll log a warning or show a placeholder. 
+    Telegram Bot API doesn't officially allow changing slow mode right now.
+    We'll just log a warning or placeholder.
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
@@ -757,14 +750,13 @@ async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not group_exists(g_id):
-        msg = f"⚠️ Group `{g_id}` is not registered."
-        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        ef = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(ef, version=2), parse_mode='MarkdownV2')
         return
 
-    # Placeholder, since official Bot API doesn't support setting slow mode.
-    logger.warning("Set slow mode is not officially supported by Bot API. Placeholder only.")
-    ef = f"⚠️ There's no official method to set slow mode via Bot API. (Placeholder only.)"
-    await context.bot.send_message(chat_id=user.id, text=escape_markdown(ef, version=2), parse_mode='MarkdownV2')
+    logger.warning("Setting slow mode is not supported by Telegram Bot API. Placeholder only.")
+    note = f"⚠️ There's no official method to set slow mode via Bot API. (Placeholder only.)"
+    await context.bot.send_message(chat_id=user.id, text=escape_markdown(note, version=2), parse_mode='MarkdownV2')
 
 # ------------------- Deletion / Filtering Handlers -------------------
 
@@ -793,7 +785,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Error deleting Arabic message: {e}")
         return
 
-    # PDF check
+    # Check for PDF
     if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
         if pdf_available:
             file_id = msg.document.file_id
@@ -822,7 +814,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     except:
                         pass
 
-    # Image check
+    # Check for photos
     if msg.photo:
         if pytesseract_available and pillow_available:
             photo_obj = msg.photo[-1]
@@ -836,7 +828,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
                     if has_arabic(extracted):
                         await msg.delete()
-                        logger.info(f"Deleted image with Arabic from user {user.id} in {chat_id}.")
+                        logger.info(f"Deleted image with Arabic from user {user.id} in group {chat_id}.")
                 except Exception as e:
                     logger.error(f"OCR error: {e}")
                 finally:
@@ -859,9 +851,9 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             await msg.delete()
-            logger.info(f"Deleted message in group {chat_id} (short-term).")
+            logger.info(f"Deleted a message in group {chat_id} (short-term).")
         except Exception as e:
-            logger.error(f"Failed to delete flagged message in group {chat_id}: {e}")
+            logger.error(f"Failed to delete flagged message in {chat_id}: {e}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Error in the bot:", exc_info=context.error)
@@ -978,10 +970,12 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     still_in = []
     not_in = []
+
     for uid in removed_list:
         try:
             member = await context.bot.get_chat_member(chat_id=g_id, user_id=uid)
-            if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            # member.status can be "member", "administrator", "creator", "left", "kicked"
+            if member.status in ALLOWED_STATUSES:
                 still_in.append(uid)
             else:
                 not_in.append(uid)
@@ -1046,7 +1040,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         invite_link_obj = await context.bot.create_chat_invite_link(
             chat_id=g_id,
-            member_limit=1,
+            member_limit=1,  # becomes invalid after 1 use
             name="One-Time Link"
         )
         cf = f"✅ One-time invite link for group `{g_id}`:\n\n{invite_link_obj.invite_link}"
@@ -1061,8 +1055,8 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """
-    Initialize DB, build app, run the bot with new commands (/mute, /limit, /slow)
-    and no /unremove_user.
+    Initialize DB, build app, run the bot with new commands
+    (no unremove_user, but includes /love, /mute, /limit, /slow).
     """
     try:
         init_db()
@@ -1076,7 +1070,7 @@ def main():
         sys.exit("BOT_TOKEN not set.")
     TOKEN = TOKEN.strip()
     if TOKEN.lower().startswith('bot='):
-        TOKEN = TOKEN[len('bot='):].strip()
+        TOKEN = TOKEN[4:].strip()
 
     try:
         app = ApplicationBuilder().token(TOKEN).build()
@@ -1094,13 +1088,13 @@ def main():
     app.add_handler(CommandHandler("show", show_groups_cmd))
     app.add_handler(CommandHandler("list", show_groups_cmd))
     app.add_handler(CommandHandler("info", info_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("help", start_cmd))  # or help_cmd if you want
     app.add_handler(CommandHandler("be_sad", be_sad_cmd))
     app.add_handler(CommandHandler("be_happy", be_happy_cmd))
     app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
     app.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))
     app.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))
-    # *** Removed unremove_user command entirely! ***
+    # /unremove_user is removed
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
     # NEW commands
@@ -1109,13 +1103,13 @@ def main():
     app.add_handler(CommandHandler("limit", limit_cmd))
     app.add_handler(CommandHandler("slow", slow_cmd))
 
-    # Message Handlers
+    # Message handlers
     # 1) Check Arabic
     app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
         delete_arabic_messages
     ))
-    # 2) Short-term deletion
+    # 2) Short-term group deletion
     app.add_handler(MessageHandler(
         filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_any_messages
@@ -1128,9 +1122,8 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info("Bot starting with new commands (no unremove_user).")
+    logger.info("Bot starting with new commands (and no ChatMemberStatus import).")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
