@@ -11,15 +11,23 @@ import asyncio
 import tempfile
 
 # -------------------------------------------------------------------------------------
-# Added imports for PDF and image text extraction (minimal example).
-# Make sure you have these installed and configured if you want the OCR/PDF detection:
-#    pip install PyPDF2 pytesseract pillow
-# And install Tesseract on your system if not already:
-#    e.g. sudo apt-get install tesseract-ocr
+# OPTIONAL / CONDITIONAL IMPORTS FOR PDF & IMAGE TEXT EXTRACTION
+# If not installed, we skip that functionality to avoid crashes.
 # -------------------------------------------------------------------------------------
-import PyPDF2
-import pytesseract
-from PIL import Image
+pdf_available = True
+try:
+    import PyPDF2
+except ImportError:
+    pdf_available = False
+
+pytesseract_available = True
+pillow_available = True
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract_available = False
+    pillow_available = False
 
 from telegram import Update, ChatMember
 from telegram.constants import ChatMemberStatus, ChatType
@@ -56,8 +64,7 @@ logger = logging.getLogger(__name__)
 
 # ------------------- Pending Actions -------------------
 
-# Dictionary to keep track of pending group names (for /group_add flow)
-pending_group_names = {}
+pending_group_names = {}  # For /group_add flow
 
 # ------------------- Lock Mechanism -------------------
 
@@ -76,7 +83,7 @@ def acquire_lock():
 
 def release_lock(lock):
     """
-    Release the acquired lock.
+    Release the acquired lock at exit.
     """
     try:
         fcntl.flock(lock, fcntl.LOCK_UN)
@@ -89,7 +96,6 @@ def release_lock(lock):
 # Acquire lock at the start
 lock = acquire_lock()
 
-# Ensure lock is released on exit
 import atexit
 atexit.register(release_lock, lock)
 
@@ -110,8 +116,8 @@ def init_permissions_db():
                 role TEXT NOT NULL
             )
         ''')
-        
-        # Create removed_users table with group_id
+
+        # Create removed_users table
         c.execute('''
             CREATE TABLE IF NOT EXISTS removed_users (
                 group_id INTEGER,
@@ -122,7 +128,7 @@ def init_permissions_db():
                 FOREIGN KEY (group_id) REFERENCES groups(group_id)
             )
         ''')
-        
+
         conn.commit()
         conn.close()
         logger.info("Permissions and Removed Users tables initialized successfully.")
@@ -177,7 +183,6 @@ def init_db():
         conn.close()
         logger.info("Database initialized successfully.")
         
-        # Initialize permissions-related tables
         init_permissions_db()
     except Exception as e:
         logger.error(f"Failed to initialize the database: {e}")
@@ -350,12 +355,6 @@ def remove_user_from_removed_users(group_id, user_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        
-        # Debug: show all rows in removed_users prior
-        c.execute("SELECT group_id, user_id FROM removed_users")
-        all_rows = c.fetchall()
-        logger.debug(f"[remove_user_from_removed_users] Currently in removed_users: {all_rows}")
-
         c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
         changes = c.rowcount
         conn.commit()
@@ -391,8 +390,8 @@ def revoke_user_permissions(user_id):
 def list_removed_users(group_id=None):
     """
     Retrieve users from the removed_users table.
-      - If group_id is None, returns a list of tuples: (group_id, user_id, removal_reason, removal_time)
-      - Otherwise, returns (user_id, removal_reason, removal_time)
+      - If group_id is None, returns (group_id, user_id, removal_reason, removal_time) for all
+      - Otherwise, returns (user_id, removal_reason, removal_time) for that group
     """
     try:
         conn = sqlite3.connect(DATABASE)
@@ -425,12 +424,13 @@ delete_all_messages_after_removal = {}
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle private messages for setting group names (after /group_add).
+    Handle private messages (e.g., setting group names after /group_add).
     """
     user = update.effective_user
-    message_text = update.message.text.strip()
+    message_text = (update.message.text or "").strip()
     logger.debug(f"Received private message from {user.id}: {message_text}")
 
+    # If user is setting group name after /group_add
     if user.id in pending_group_names:
         group_id = pending_group_names.pop(user.id)
         group_name = message_text
@@ -461,9 +461,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 text=confirmation_message,
                 parse_mode='MarkdownV2'
             )
-            logger.info(
-                f"Group name for {group_id} set to {group_name} by user {user.id}"
-            )
+            logger.info(f"Group name for {group_id} set to {group_name} by user {user.id}")
         except Exception as e:
             error_message = escape_markdown(
                 "⚠️ Failed to set group name. Please try `/group_add` again.",
@@ -478,7 +476,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /start - simple readiness check, only for the ALLOWED_USER_ID
+    /start - readiness check, only for the ALLOWED_USER_ID
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
@@ -596,7 +594,7 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Already bypassed?
+    # Check if already bypassed
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -677,7 +675,7 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             g_name_esc = escape_markdown(g_name_display, version=2)
             msg += f"*Group:* {g_name_esc}\n*Group ID:* `{g_id}`\n"
 
-            # deletion setting
+            # Deletion setting
             try:
                 conn = sqlite3.connect(DATABASE)
                 c = conn.cursor()
@@ -745,7 +743,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/rmove_group <group_id>` – Remove a registered group
 • `/bypass <user_id>` – Add a user to the bypass list
 • `/unbypass <user_id>` – Remove a user from the bypass list
-• `/group_id` – Show the current group ID or your user ID (if private)
+• `/group_id` – Show current group ID or your user ID (if private)
 • `/show` – Display all groups & their settings
 • `/info` – Display current config
 • `/help` – Display this help text
@@ -756,7 +754,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/add_removed_user <group_id> <user_id>` – Add a user to 'Removed Users'
 • `/list_removed_users` – Show all users in 'Removed Users'
 • `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
-• `/check <group_id>` – Validate 'Removed Users' vs. actual group membership
+• `/check <group_id>` – Validate 'Removed Users' vs actual group membership
 • `/link <group_id>` – Create a one\-time\-use invite link private only
 """
     try:
@@ -980,7 +978,7 @@ async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /rmove_user <group_id> <user_id> – forcibly remove user from group & table
+    /rmove_user <group_id> <user_id> – forcibly remove user from group & DB
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
@@ -1011,7 +1009,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to revoke perms for {u_id}: {e}")
 
-    # 4) ban from group (requires bot to be admin in that group)
+    # 4) ban from group
     try:
         await context.bot.ban_chat_member(chat_id=g_id, user_id=u_id)
     except Exception as e:
@@ -1022,7 +1020,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ban error for user {u_id} in group {g_id}: {e}")
         return
 
-    # 5) set short-term deletion flag, so any new messages in that group are deleted
+    # 5) set short-term deletion flag
     delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
     asyncio.create_task(remove_deletion_flag_after_timeout(g_id))
 
@@ -1037,8 +1035,8 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Delete any message (including PDFs, images, etc.) if the text, caption,
-    or extracted text from attached PDF/image has Arabic characters.
+    Delete messages (including PDFs/images) if Arabic text is found.
+    If PyPDF2/pytesseract/Pillow not installed, we skip those checks.
     """
     msg = update.message
     if not msg:
@@ -1047,107 +1045,126 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     user = msg.from_user
     g_id = msg.chat.id
 
+    # 1) Check if deletion is enabled
     if not is_deletion_enabled(g_id):
         return
 
+    # 2) Check if user is bypassed
     if is_bypass_user(user.id):
         return
 
-    # Check for Arabic in either text or caption
-    text_or_caption = msg.text or msg.caption
+    # 3) Check text or caption for Arabic
+    text_or_caption = (msg.text or msg.caption or "")
     if text_or_caption and has_arabic(text_or_caption):
         try:
             await msg.delete()
             logger.info(f"Deleted message with Arabic from user {user.id} in group {g_id}")
         except Exception as e:
-            logger.error(f"Error deleting msg in group {g_id}: {e}")
+            logger.error(f"Error deleting message in group {g_id}: {e}")
         return
 
     # --------------------------------------------------------------------
-    # Additional checks for PDFs or images (OCR). If the message has a
-    # .pdf document or a photo, we attempt to extract text and check for Arabic.
+    # Additional checks for PDFs or images, if the relevant libraries exist
     # --------------------------------------------------------------------
 
-    # 1) If it's a PDF document
+    # If there's a PDF:
     if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
-        file_id = msg.document.file_id
-        file_ref = await context.bot.get_file(file_id)
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            await file_ref.download_to_drive(tmp_pdf.name)
-            tmp_pdf.flush()
-            try:
-                with open(tmp_pdf.name, 'rb') as pdf_file:
-                    reader = PyPDF2.PdfReader(pdf_file)
-                    all_text = ""
-                    for page in reader.pages:
-                        page_text = page.extract_text() or ""
-                        all_text += page_text
-                    if all_text and has_arabic(all_text):
+        if pdf_available:
+            # Attempt to extract text from PDF
+            file_id = msg.document.file_id
+            file_ref = await context.bot.get_file(file_id)
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                await file_ref.download_to_drive(tmp_pdf.name)
+                tmp_pdf.flush()
+                try:
+                    with open(tmp_pdf.name, 'rb') as pdf_file:
+                        try:
+                            reader = PyPDF2.PdfReader(pdf_file)
+                        except Exception as e:
+                            logger.error(f"PyPDF2 error reading PDF: {e}")
+                            reader = None
+
+                        if reader:
+                            all_text = ""
+                            for page in reader.pages:
+                                page_text = page.extract_text() or ""
+                                all_text += page_text
+                            if all_text and has_arabic(all_text):
+                                try:
+                                    await msg.delete()
+                                    logger.info(f"Deleted PDF (Arabic) from user {user.id} in group {g_id}")
+                                except Exception as e:
+                                    logger.error(f"Error deleting PDF in group {g_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to parse PDF: {e}")
+                finally:
+                    try:
+                        os.remove(tmp_pdf.name)
+                    except:
+                        pass
+        else:
+            logger.warning("PDF check skipped - PyPDF2 not installed.")
+
+    # If there's a photo:
+    if msg.photo:
+        if pytesseract_available and pillow_available:
+            photo_obj = msg.photo[-1]  # highest-res
+            file_id = photo_obj.file_id
+            file_ref = await context.bot.get_file(file_id)
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+                await file_ref.download_to_drive(tmp_img.name)
+                tmp_img.flush()
+                try:
+                    from PIL import Image
+                    text_extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
+                    if text_extracted and has_arabic(text_extracted):
                         try:
                             await msg.delete()
-                            logger.info(f"Deleted PDF with Arabic text from user {user.id} in group {g_id}")
+                            logger.info(f"Deleted image (Arabic) from user {user.id} in group {g_id}")
                         except Exception as e:
-                            logger.error(f"Error deleting PDF in group {g_id}: {e}")
-            except Exception as e:
-                logger.error(f"Failed to parse PDF: {e}")
-            finally:
-                try:
-                    os.remove(tmp_pdf.name)
-                except:
-                    pass
-
-    # 2) If it's a photo
-    if msg.photo:
-        # Telegram photos come in different sizes; pick the highest-res
-        photo_obj = msg.photo[-1]
-        file_id = photo_obj.file_id
-        file_ref = await context.bot.get_file(file_id)
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
-            await file_ref.download_to_drive(tmp_img.name)
-            tmp_img.flush()
-            try:
-                # OCR the image
-                text_extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
-                if text_extracted and has_arabic(text_extracted):
+                            logger.error(f"Error deleting image in group {g_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to OCR image: {e}")
+                finally:
                     try:
-                        await msg.delete()
-                        logger.info(f"Deleted image with Arabic text from user {user.id} in group {g_id}")
-                    except Exception as e:
-                        logger.error(f"Error deleting image in group {g_id}: {e}")
-            except Exception as e:
-                logger.error(f"Failed to do OCR on image: {e}")
-            finally:
-                try:
-                    os.remove(tmp_img.name)
-                except:
-                    pass
+                        os.remove(tmp_img.name)
+                    except:
+                        pass
+        else:
+            logger.warning("Image OCR check skipped - pytesseract or Pillow not installed.")
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Delete any messages if the group is flagged after a removal for MESSAGE_DELETE_TIMEFRAME seconds.
+    Delete all messages if the group is flagged after removal for MESSAGE_DELETE_TIMEFRAME seconds.
     """
     msg = update.message
     if not msg:
         return
 
     g_id = msg.chat.id
+    # If group in the short-term deletion dict
     if g_id in delete_all_messages_after_removal:
         try:
             await msg.delete()
-            logger.info(f"Deleted message in group {g_id}")
+            logger.info(f"Deleted message in group {g_id} (short-term deletion active)")
         except Exception as e:
-            logger.error(f"Failed to delete a flagged message in group {g_id}: {e}")
+            logger.error(f"Failed to delete flagged message in group {g_id}: {e}")
 
 # ------------------- Utility Functions -------------------
 
 def has_arabic(text):
-    # True if there's any character in the Arabic Unicode range
+    """
+    Return True if there's any character in the Arabic Unicode range.
+    """
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Error in the bot:", exc_info=context.error)
 
 async def remove_deletion_flag_after_timeout(group_id):
+    """
+    After MESSAGE_DELETE_TIMEFRAME seconds, remove the short-term deletion flag.
+    """
     await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
     delete_all_messages_after_removal.pop(group_id, None)
     logger.info(f"Deletion flag removed for group {group_id}")
@@ -1299,7 +1316,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = escape_markdown("⚠️ Error sending check results.", version=2)
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
-    # Optionally auto-ban those still in group
+    # Optional: auto-ban those still in group
     if still_in:
         for x in still_in:
             try:
@@ -1308,7 +1325,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed to ban user {x} from group {g_id}: {e}")
 
-# ------------------- NEW: One-Time-Use Invite Link Command -------------------
+# ------------------- One-Time-Use Invite Link Command -------------------
 
 async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1330,28 +1347,24 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Check if the group is registered in your DB
+    # Check if the group is registered
     if not group_exists(g_id):
         wr = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
         await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
         return
 
-    # Create a one-time-use invite link
+    # Create one-time invite link
     try:
         invite_link_obj = await context.bot.create_chat_invite_link(
             chat_id=g_id,
-            member_limit=1,   # The link expires after 1 user uses it
+            member_limit=1,  # becomes invalid after 1 use
             name="One-Time Link"
         )
         link_message = escape_markdown(
             f"✅ One-time invite link for group `{g_id}`:\n\n{invite_link_obj.invite_link}",
             version=2
         )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=link_message,
-            parse_mode='MarkdownV2'
-        )
+        await context.bot.send_message(chat_id=user.id, text=link_message, parse_mode='MarkdownV2')
         logger.info(f"Created one-time link for group {g_id}: {invite_link_obj.invite_link}")
     except Exception as e:
         logger.error(f"Error creating one-time invite link for group {g_id}: {e}")
@@ -1403,30 +1416,28 @@ def main():
     app.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))
     app.add_handler(CommandHandler("unremove_user", unremove_user_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
+    app.add_handler(CommandHandler("link", link_cmd))  # one-time link
 
-    # NEW: Handler for the /link command
-    app.add_handler(CommandHandler("link", link_cmd))
-
-    # Message handlers
-    # 1) Delete if Arabic found in text or caption (and now PDFs/images)
+    # Message Handlers
+    # 1) Check Arabic in text/caption/PDF/image
     app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
         delete_arabic_messages
     ))
 
-    # 2) Delete flagged
+    # 2) Short-term group deletion flag
     app.add_handler(MessageHandler(
         filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_any_messages
     ))
 
-    # 3) Private (handle group name)
+    # 3) Private messages for pending group name
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_private_message
     ))
 
-    # Errors
+    # Global error handler
     app.add_error_handler(error_handler)
 
     logger.info("Bot starting up...")
