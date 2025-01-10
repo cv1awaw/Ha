@@ -424,11 +424,11 @@ delete_all_messages_after_removal = {}
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle private messages (e.g., setting group names after /group_add).
+    Handle a follow-up message from the user to set group name (originally intended for private chat).
     """
     user = update.effective_user
     message_text = (update.message.text or "").strip()
-    logger.debug(f"Received private message from {user.id}: {message_text}")
+    logger.debug(f"Received message from {user.id}: {message_text}")
 
     # If user is setting group name after /group_add
     if user.id in pending_group_names:
@@ -755,7 +755,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `/list_removed_users` – Show all users in 'Removed Users'
 • `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
 • `/check <group_id>` – Validate 'Removed Users' vs actual group membership
-• `/link <group_id>` – Create a one\-time\-use invite link private only
+• `/link <group_id>` – Create a one\-time\-use invite link (private only)
 """
     try:
         help_esc = escape_markdown(help_text, version=2)
@@ -1431,9 +1431,9 @@ def main():
         delete_any_messages
     ))
 
-    # 3) Private messages for pending group name
+    # 3) (FIX) Remove the & filters.ChatType.PRIVATE so that your reply is processed:
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        filters.TEXT & ~filters.COMMAND,
         handle_private_message
     ))
 
