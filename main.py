@@ -46,6 +46,10 @@ LOCK_FILE = '/tmp/telegram_bot.lock'
 MESSAGE_DELETE_TIMEFRAME = 15
 ALLOWED_STATUSES = ("member", "administrator", "creator")
 
+# In-memory dict for group name requests and other flows
+pending_group_names = {}
+user_flows = {}  # to handle /delete and /msg flows
+
 # ------------------- Logging Setup -------------------
 
 logging.basicConfig(
@@ -53,10 +57,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# In-memory dict for group name requests and other flows
-pending_group_names = {}
-user_flows = {}  # to handle /delete and /msg flows
 
 # ------------------- File Lock Mechanism -------------------
 
@@ -250,7 +250,7 @@ def enable_deletion(group_id):
         conn.close()
         logger.info(f"Enabled Arabic deletion for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error enabling deletion for {group_id}: {e}")
+        logger.error(f"Error enabling deletion for group {group_id}: {e}")
         raise
 
 def disable_deletion(group_id):
@@ -266,7 +266,7 @@ def disable_deletion(group_id):
         conn.close()
         logger.info(f"Disabled Arabic deletion for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error disabling deletion for {group_id}: {e}")
+        logger.error(f"Error disabling deletion for group {group_id}: {e}")
         raise
 
 def is_deletion_enabled(group_id):
@@ -278,7 +278,7 @@ def is_deletion_enabled(group_id):
         conn.close()
         return bool(row and row[0])
     except Exception as e:
-        logger.error(f"Error checking deletion for {group_id}: {e}")
+        logger.error(f"Error checking deletion for group {group_id}: {e}")
         return False
 
 def revoke_user_permissions(user_id):
@@ -365,7 +365,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/love <group_id> <user_id>` – Remove a user from 'Removed Users'.\n"
         "• `/rmove_user <group_id> <user_id>` – Force remove user from group.\n"
         "• `/mute <group_id> <user_id> <minutes>` – Mute user.\n"
-        "• `/unmute <group_id> <user_id>` – Remove mute from user.\n"
+        "• `/unmute <group_id> <user_id>` – Unmute user.\n"
         "• `/limit <group_id> <user_id> <permission_type> <on/off>` – Toggle user permission.\n"
         "• `/slow <group_id> <seconds>` – Placeholder for slow mode.\n"
         "• `/be_sad <group_id>` – Enable Arabic deletion.\n"
@@ -942,7 +942,7 @@ async def handle_next_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await context.bot.delete_message(chat_id=group_id, message_id=msg_id)
                     await context.bot.send_message(
                         chat_id=user.id,
-                        text=f"✅ Deleted message {msg_id} in group {group_id}."
+                        text=f"✅ Deleted message {msg_id} in group `{group_id}`."
                     )
                 except Exception as e:
                     logger.error(f"Error deleting message {msg_id} in group {group_id}: {e}")
@@ -960,7 +960,7 @@ async def handle_next_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 flow["step"] = "await_confirm"
                 user_flows[user.id] = flow
                 confirm = (
-                    f"Are you sure you want to send the following text to group {group_id}?\n\n"
+                    f"Are you sure you want to send the following text to group `{group_id}`?\n\n"
                     f"\"{text}\"\n\n"
                     "Type 'yes' to send or 'no' to cancel."
                 )
@@ -1007,7 +1007,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     if text_or_caption and has_arabic(text_or_caption):
         try:
             await msg.delete()
-            logger.info(f"Deleted Arabic from {user.id} in group {chat_id}.")
+            logger.info(f"Deleted Arabic from user {user.id} in group {chat_id}.")
         except Exception as e:
             logger.error(f"Error deleting Arabic message: {e}")
         return
@@ -1028,7 +1028,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                                 all_text += page.extract_text() or ""
                             if has_arabic(all_text):
                                 await msg.delete()
-                                logger.info(f"Deleted PDF with Arabic from user {user.id} in {chat_id}.")
+                                logger.info(f"Deleted PDF with Arabic from user {user.id} in group {chat_id}.")
                         except Exception as e:
                             logger.error(f"PyPDF2 read error: {e}")
                 except Exception as e:
@@ -1051,7 +1051,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
                     if has_arabic(extracted):
                         await msg.delete()
-                        logger.info(f"Deleted image with Arabic from user {user.id} in {chat_id}.")
+                        logger.info(f"Deleted image with Arabic from user {user.id} in group {chat_id}.")
                 except Exception as e:
                     logger.error(f"OCR error: {e}")
                 finally:
@@ -1085,6 +1085,285 @@ async def remove_deletion_flag_after_timeout(group_id):
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Error in the bot:", exc_info=context.error)
+
+# ------------------- be_sad / be_happy / check Command Handlers -------------------
+
+async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/be_sad <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        e = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(e, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        enable_deletion(g_id)
+        cf = f"✅ Arabic deletion enabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error enabling deletion for group {g_id}: {e}")
+        err = "⚠️ Could not enable deletion. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/be_happy <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        e = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(e, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        disable_deletion(g_id)
+        cf = f"✅ Arabic deletion disabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error disabling deletion for group {g_id}: {e}")
+        err = "⚠️ Could not disable deletion. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/check <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        e = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(e, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        # Fetch current members from the group
+        current_members = []
+        async for member in context.bot.get_chat_members(g_id):
+            current_members.append(member.user.id)
+
+        # Fetch removed_users from DB
+        removed_users = list_removed_users(g_id)
+        removed_user_ids = [user_id for (_, user_id, _, _) in removed_users]
+
+        # Find discrepancies
+        not_in_group = [uid for uid in removed_user_ids if uid not in current_members]
+        still_in = [uid for uid in removed_user_ids if uid in current_members]
+
+        # Prepare response
+        resp = "🔍 *Check Results:*\n\n"
+        if not_in_group:
+            resp += f"• Users not in group `{g_id}` anymore:\n"
+            resp += "\n".join([f"  - `{uid}`" for uid in not_in_group])
+            resp += "\n\n"
+        else:
+            resp += "• No users missing from the group.\n\n"
+
+        if still_in:
+            resp += f"• Users still in group `{g_id}` who should be removed:\n"
+            resp += "\n".join([f"  - `{uid}`" for uid in still_in])
+            resp += "\n\n"
+            resp += "🔨 Attempting to auto-ban these users..."
+
+            # Auto-ban the users
+            for x in still_in:
+                try:
+                    await context.bot.ban_chat_member(chat_id=g_id, user_id=x)
+                    logger.info(f"Auto-banned user {x} in group {g_id} after /check.")
+                except Exception as e:
+                    logger.error(f"Failed to ban {x} in group {g_id}: {e}")
+        else:
+            resp += "• No discrepancies found."
+
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(resp, version=2),
+            parse_mode='MarkdownV2'
+        )
+    except Exception as e:
+        logger.error(f"Error during /check for group {g_id}: {e}")
+        err = "⚠️ An error occurred while performing the check. Check logs for details."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/link <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        e = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(e, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        invite_link_obj = await context.bot.create_chat_invite_link(
+            chat_id=g_id,
+            member_limit=1,
+            name="One-Time Link"
+        )
+        cf = f"✅ One-time invite link for group `{g_id}`:\n\n{invite_link_obj.invite_link}"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+        logger.info(f"Created one-time link for {g_id}: {invite_link_obj.invite_link}")
+    except Exception as e:
+        logger.error(f"Error creating link for {g_id}: {e}")
+        err = "⚠️ Could not create invite link. Check bot admin rights & logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    types_list = "\n".join([f"• `{ptype}`" for ptype in VALID_PERMISSION_TYPES])
+    message = (
+        "*Possible `permission_type` values for `/limit`:*\n\n"
+        f"{types_list}\n\n"
+        "Example usage:\n"
+        "`/limit <group_id> <user_id> photos off`\n\n"
+        "This disallows that user from sending **photos** in the group.\n\n"
+        "Remember: The bot must be an admin with can_restrict_members for this to work."
+    )
+
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=escape_markdown(message, version=2),
+        parse_mode='MarkdownV2'
+    )
+
+# ------------------- Deletion & Filtering Handlers -------------------
+
+async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+    user = msg.from_user
+    chat_id = msg.chat.id
+    if not is_deletion_enabled(chat_id):
+        return
+    if is_bypass_user(user.id):
+        return
+
+    text_or_caption = (msg.text or msg.caption or "")
+    if text_or_caption and has_arabic(text_or_caption):
+        try:
+            await msg.delete()
+            logger.info(f"Deleted Arabic from user {user.id} in group {chat_id}.")
+        except Exception as e:
+            logger.error(f"Error deleting Arabic message: {e}")
+        return
+
+    if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
+        if pdf_available:
+            file_id = msg.document.file_id
+            file_obj = await context.bot.get_file(file_id)
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                await file_obj.download_to_drive(tmp_pdf.name)
+                tmp_pdf.flush()
+                try:
+                    with open(tmp_pdf.name, 'rb') as pdf_file:
+                        try:
+                            reader = PyPDF2.PdfReader(pdf_file)
+                            all_text = ""
+                            for page in reader.pages:
+                                all_text += page.extract_text() or ""
+                            if has_arabic(all_text):
+                                await msg.delete()
+                                logger.info(f"Deleted PDF with Arabic from user {user.id} in group {chat_id}.")
+                        except Exception as e:
+                            logger.error(f"PyPDF2 read error: {e}")
+                except Exception as e:
+                    logger.error(f"PDF parse error: {e}")
+                finally:
+                    try:
+                        os.remove(tmp_pdf.name)
+                    except:
+                        pass
+
+    if msg.photo:
+        if pytesseract_available and pillow_available:
+            photo_obj = msg.photo[-1]
+            file_id = photo_obj.file_id
+            file_ref = await context.bot.get_file(file_id)
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+                await file_ref.download_to_drive(tmp_img.name)
+                tmp_img.flush()
+                try:
+                    extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
+                    if has_arabic(extracted):
+                        await msg.delete()
+                        logger.info(f"Deleted image with Arabic from user {user.id} in group {chat_id}.")
+                except Exception as e:
+                    logger.error(f"OCR error: {e}")
+                finally:
+                    try:
+                        os.remove(tmp_img.name)
+                    except:
+                        pass
+
+async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+    chat_id = msg.chat.id
+    if chat_id in delete_all_messages_after_removal:
+        expiry = delete_all_messages_after_removal[chat_id]
+        if datetime.utcnow() > expiry:
+            delete_all_messages_after_removal.pop(chat_id, None)
+            logger.info(f"Short-term deletion expired for {chat_id}.")
+            return
+        try:
+            await msg.delete()
+            logger.info(f"Deleted a message in group {chat_id} (short-term).")
+        except Exception as e:
+            logger.error(f"Failed to delete flagged message in {chat_id}: {e}")
 
 # ------------------- main() -------------------
 
