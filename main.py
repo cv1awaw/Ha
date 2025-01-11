@@ -44,7 +44,7 @@ from telegram.helpers import escape_markdown
 # ------------------- Configuration -------------------
 
 DATABASE = 'warnings.db'
-ALLOWED_USER_ID = 6177929931  # <-- ضع هنا رقم اليوزر الخاص بك مثلاً 123456789 
+ALLOWED_USER_ID = 6177929931  # <-- Put your own Telegram user ID here
 LOCK_FILE = '/tmp/telegram_bot.lock'
 MESSAGE_DELETE_TIMEFRAME = 15
 
@@ -59,8 +59,9 @@ logger = logging.getLogger(__name__)
 # If a user is "member", "administrator", or "creator", we can't restrict them if they're an admin or creator
 ALLOWED_STATUSES = ("member", "administrator", "creator")
 
-# In-memory dict for group name requests
+# In-memory dict for group name requests and other flows
 pending_group_names = {}
+user_flows = {}  # to handle /delete and /msg flows
 
 # ------------------- File Lock Mechanism -------------------
 
@@ -390,8 +391,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/check <group_id>` – Validate 'Removed Users' vs actual membership.\n"
         "• `/link <group_id>` – Create one-time invite link.\n"
         "• `/permission_type` – Show valid `<permission_type>` for `/limit`.\n"
+        "• `/delete <group_id>` – Bot will ask for the message link to delete.\n"
+        "• `/msg <group_id>` – Bot will ask you to type a message, then confirm sending.\n"
         "\n"
-        "*Note:* The bot must be *admin* with 'can_restrict_members' to effectively mute/limit.\n"
+        "*Note:* The bot must be *admin* with 'can_restrict_members' to effectively mute/limit,\n"
+        "and must be admin to delete messages or send messages in the group.\n"
     )
     await context.bot.send_message(
         chat_id=user.id,
@@ -427,30 +431,122 @@ async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(confirm, version=2), parse_mode='MarkdownV2')
 
 async def handle_group_name_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the next message from the admin if they are setting a group name,
+       or if they are in /delete or /msg flow.
+    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
-        return
-
-    if user.id not in pending_group_names:
         return
 
     text = (update.message.text or "").strip()
     if not text:
         return
 
-    group_id = pending_group_names.pop(user.id)
-    try:
-        set_group_name(group_id, text)
-        msg = f"✅ Group `{group_id}` name set to: *{text}*"
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
-        )
-    except Exception as e:
-        logger.error(f"Error setting group name for {group_id}: {e}")
-        err = "⚠️ Could not set group name. Check logs."
-        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+    # 1) If user is naming a group
+    if user.id in pending_group_names:
+        group_id = pending_group_names.pop(user.id)
+        try:
+            set_group_name(group_id, text)
+            msg = f"✅ Group `{group_id}` name set to: *{text}*"
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=escape_markdown(msg, version=2),
+                parse_mode='MarkdownV2'
+            )
+        except Exception as e:
+            logger.error(f"Error setting group name for {group_id}: {e}")
+            err = "⚠️ Could not set group name. Check logs."
+            await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+        return
+
+    # 2) If user is in a /delete flow or /msg flow
+    if user.id in user_flows:
+        flow = user_flows[user.id]
+        mode = flow.get("mode")
+        step = flow.get("step")
+        group_id = flow.get("group_id")
+
+        # ---------------------
+        #     /delete flow
+        # ---------------------
+        if mode == "delete" and step == "await_link":
+            # We got the link or the message ID from user
+            link = text
+            # Attempt to parse message_id out of link
+            msg_id = parse_message_link(link)
+            if msg_id is None:
+                # maybe user gave a pure message ID
+                try:
+                    msg_id = int(link)
+                except:
+                    msg_id = None
+
+            if msg_id is None:
+                # we fail
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="⚠️ Could not parse a valid message_id from your input. Please try again or /cancel.",
+                )
+            else:
+                # Attempt to delete
+                try:
+                    await context.bot.delete_message(chat_id=group_id, message_id=msg_id)
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"✅ Successfully deleted message {msg_id} from group {group_id}."
+                    )
+                except Exception as e:
+                    logger.error(f"Error deleting message {msg_id} in {group_id}: {e}")
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text="⚠️ Could not delete. Check if the bot is admin, or message ID is valid."
+                    )
+            # end flow
+            del user_flows[user.id]
+            return
+
+        # ---------------------
+        #      /msg flow
+        # ---------------------
+        if mode == "msg":
+            # step 1: waiting for text
+            if step == "await_text":
+                # store the text
+                flow["draft_text"] = text
+                flow["step"] = "await_confirm"
+                user_flows[user.id] = flow
+
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=(
+                        f"Are you sure you want to send the following text to group {group_id}?\n\n"
+                        f"\"{text}\"\n\n"
+                        "Type 'yes' to confirm or 'no' to cancel."
+                    )
+                )
+                return
+
+            # step 2: waiting for confirm
+            elif step == "await_confirm":
+                if text.lower() in ["yes", "y"]:
+                    # send the message
+                    final_text = flow.get("draft_text")
+                    try:
+                        await context.bot.send_message(chat_id=group_id, text=final_text)
+                        await context.bot.send_message(chat_id=user.id, text="✅ Message sent successfully.")
+                    except Exception as e:
+                        logger.error(f"Error sending message to {group_id}: {e}")
+                        await context.bot.send_message(
+                            chat_id=user.id,
+                            text="⚠️ Could not send. Check if the bot is admin or group ID is valid."
+                        )
+                else:
+                    await context.bot.send_message(chat_id=user.id, text="❌ Canceled sending the message.")
+                del user_flows[user.id]
+                return
+
+    # If none of the above flows apply, do nothing.
+
 
 async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1170,6 +1266,92 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
+# ----------------------------------------------------------------------
+# NEW Commands: /delete <group_id> and /msg <group_id>
+# ----------------------------------------------------------------------
+
+async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /delete <group_id> 
+        Then bot asks for the message link or ID to delete.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/delete <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=msg)
+        return
+
+    try:
+        group_id = int(context.args[0])
+    except:
+        await context.bot.send_message(chat_id=user.id, text="⚠️ group_id must be integer.")
+        return
+
+    # Check if group is registered (optional)
+    # if not group_exists(group_id):
+    #     await context.bot.send_message(chat_id=user.id, text=f"⚠️ Group {group_id} is not in DB, but continuing anyway.")
+    #     # not strictly necessary to block
+
+    # set user flow
+    user_flows[user.id] = {
+        "mode": "delete",
+        "step": "await_link",
+        "group_id": group_id
+    }
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=(
+            f"Please send me the *link* (like `https://t.me/c/...`) or the *message ID* "
+            f"you want to delete from group `{group_id}`."
+        ),
+        parse_mode='Markdown'
+    )
+
+async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /msg <group_id> 
+        Then the bot asks for the text to send, then confirms.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/msg <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=msg)
+        return
+
+    try:
+        group_id = int(context.args[0])
+    except:
+        await context.bot.send_message(chat_id=user.id, text="⚠️ group_id must be integer.")
+        return
+
+    # set user flow
+    user_flows[user.id] = {
+        "mode": "msg",
+        "step": "await_text",
+        "group_id": group_id
+    }
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=f"Please type the message you want to send to group `{group_id}`."
+    )
+
+
+def parse_message_link(link_text: str):
+    """
+    Tries to parse a Telegram message link of the form:
+    https://t.me/c/123456789/100
+    Return the message ID if found, else None.
+    """
+    match = re.search(r't\.me/c/\d+/(?P<msgid>\d+)', link_text)
+    if match:
+        return int(match.group('msgid'))
+    return None
+
+
 # ------------------- main() -------------------
 
 def main():
@@ -1212,15 +1394,22 @@ def main():
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
 
+    # New commands for deleting a message by link, and sending a message with confirmation
+    app.add_handler(CommandHandler("delete", delete_cmd))
+    app.add_handler(CommandHandler("msg", msg_cmd))
+
     # Message handlers
+    # 1) handle Arabic deletion
     app.add_handler(MessageHandler(
         filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
         delete_arabic_messages
     ))
+    # 2) handle short-term message deletion after removal
     app.add_handler(MessageHandler(
         filters.ALL,
         delete_any_messages
     ))
+    # 3) handle group naming or flows (/delete, /msg)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_group_name_reply
@@ -1228,7 +1417,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info("Bot starting with improved /limit checks & /unmute command.")
+    logger.info("Bot starting with new /delete and /msg features.")
     app.run_polling()
 
 if __name__ == "__main__":
