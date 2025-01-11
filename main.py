@@ -44,7 +44,7 @@ from telegram.helpers import escape_markdown
 # ------------------- Configuration -------------------
 
 DATABASE = 'warnings.db'
-ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
+ALLOWED_USER_ID = 6177929931  # <-- ضع هنا رقم اليوزر الخاص بك مثلاً 123456789 
 LOCK_FILE = '/tmp/telegram_bot.lock'
 MESSAGE_DELETE_TIMEFRAME = 15
 
