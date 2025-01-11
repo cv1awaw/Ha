@@ -899,6 +899,10 @@ async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ------------------- Deletion / Filtering Handlers -------------------
 
 def has_arabic(text):
+    """
+    Returns True if 'text' contains any Arabic letters.
+    We use the Unicode range \u0600-\u06FF to detect Arabic characters.
+    """
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1199,7 +1203,7 @@ def main():
     app.add_handler(CommandHandler("love", love_cmd))
     app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))  # New
+    app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("limit", limit_cmd))
     app.add_handler(CommandHandler("slow", slow_cmd))
     app.add_handler(CommandHandler("be_sad", be_sad_cmd))
