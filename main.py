@@ -56,7 +56,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# If a user is "member", "administrator", or "creator", we can't restrict them if they're an admin or creator
 ALLOWED_STATUSES = ("member", "administrator", "creator")
 
 # In-memory dict for group name requests and other flows
@@ -66,9 +65,6 @@ user_flows = {}  # to handle /delete and /msg flows
 # ------------------- File Lock Mechanism -------------------
 
 def acquire_lock():
-    """
-    Acquire an exclusive file lock so only one bot instance can run.
-    """
     try:
         lock_file = open(LOCK_FILE, 'w')
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -79,9 +75,6 @@ def acquire_lock():
         sys.exit("Another instance is already running.")
 
 def release_lock(lock_file):
-    """
-    Release the file lock upon exit.
-    """
     try:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
@@ -129,7 +122,6 @@ def init_db():
         conn.execute("PRAGMA foreign_keys = 1")
         c = conn.cursor()
 
-        # groups
         c.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY,
@@ -137,14 +129,12 @@ def init_db():
             )
         ''')
 
-        # bypass_users
         c.execute('''
             CREATE TABLE IF NOT EXISTS bypass_users (
                 user_id INTEGER PRIMARY KEY
             )
         ''')
 
-        # deletion_settings
         c.execute('''
             CREATE TABLE IF NOT EXISTS deletion_settings (
                 group_id INTEGER PRIMARY KEY,
@@ -153,7 +143,6 @@ def init_db():
             )
         ''')
 
-        # users
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -166,7 +155,7 @@ def init_db():
         conn.commit()
         conn.close()
         logger.info("Main DB tables initialized.")
-        
+
         init_permissions_db()
     except Exception as e:
         logger.error(f"Failed to initialize DB: {e}")
@@ -178,10 +167,7 @@ def add_group(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute("""
-            INSERT OR IGNORE INTO groups (group_id, group_name)
-            VALUES (?, ?)
-        """, (group_id, None))
+        c.execute("INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)", (group_id, None))
         conn.commit()
         conn.close()
         logger.info(f"Added group {group_id} to DB.")
@@ -466,29 +452,23 @@ async def handle_group_name_reply(update: Update, context: ContextTypes.DEFAULT_
         step = flow.get("step")
         group_id = flow.get("group_id")
 
-        # ---------------------
-        #     /delete flow
-        # ---------------------
+        # /delete flow
         if mode == "delete" and step == "await_link":
-            # We got the link or the message ID from user
             link = text
-            # Attempt to parse message_id out of link
             msg_id = parse_message_link(link)
             if msg_id is None:
-                # maybe user gave a pure message ID
+                # maybe user gave a pure ID
                 try:
                     msg_id = int(link)
                 except:
                     msg_id = None
 
             if msg_id is None:
-                # we fail
                 await context.bot.send_message(
                     chat_id=user.id,
-                    text="⚠️ Could not parse a valid message_id from your input. Please try again or /cancel.",
+                    text="⚠️ Could not parse a valid message_id. Please try again or /cancel.",
                 )
             else:
-                # Attempt to delete
                 try:
                     await context.bot.delete_message(chat_id=group_id, message_id=msg_id)
                     await context.bot.send_message(
@@ -499,19 +479,14 @@ async def handle_group_name_reply(update: Update, context: ContextTypes.DEFAULT_
                     logger.error(f"Error deleting message {msg_id} in {group_id}: {e}")
                     await context.bot.send_message(
                         chat_id=user.id,
-                        text="⚠️ Could not delete. Check if the bot is admin, or message ID is valid."
+                        text="⚠️ Could not delete. Check if the bot is admin, or the message ID is valid."
                     )
-            # end flow
             del user_flows[user.id]
             return
 
-        # ---------------------
-        #      /msg flow
-        # ---------------------
+        # /msg flow
         if mode == "msg":
-            # step 1: waiting for text
             if step == "await_text":
-                # store the text
                 flow["draft_text"] = text
                 flow["step"] = "await_confirm"
                 user_flows[user.id] = flow
@@ -519,17 +494,15 @@ async def handle_group_name_reply(update: Update, context: ContextTypes.DEFAULT_
                 await context.bot.send_message(
                     chat_id=user.id,
                     text=(
-                        f"Are you sure you want to send the following text to group {group_id}?\n\n"
+                        f"Are you sure you want to send this text to group {group_id}?\n\n"
                         f"\"{text}\"\n\n"
                         "Type 'yes' to confirm or 'no' to cancel."
                     )
                 )
                 return
 
-            # step 2: waiting for confirm
             elif step == "await_confirm":
                 if text.lower() in ["yes", "y"]:
-                    # send the message
                     final_text = flow.get("draft_text")
                     try:
                         await context.bot.send_message(chat_id=group_id, text=final_text)
@@ -544,9 +517,6 @@ async def handle_group_name_reply(update: Update, context: ContextTypes.DEFAULT_
                     await context.bot.send_message(chat_id=user.id, text="❌ Canceled sending the message.")
                 del user_flows[user.id]
                 return
-
-    # If none of the above flows apply, do nothing.
-
 
 async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -641,9 +611,6 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
 
 async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /love <group_id> <user_id>
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -681,9 +648,6 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /rmove_user <group_id> <user_id>
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -722,11 +686,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next {MESSAGE_DELETE_TIMEFRAME}s will be deleted."
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
-# MUTE:
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /mute <group_id> <user_id> <minutes>
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -754,7 +714,6 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     perms = ChatPermissions(can_send_messages=False)
 
     try:
-        # Attempt to restrict
         await context.bot.restrict_chat_member(chat_id=g_id, user_id=u_id, permissions=perms, until_date=until_date)
         cf = f"✅ Muted user `{u_id}` in group `{g_id}` for {minutes} minute(s)."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
@@ -763,11 +722,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not mute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# UNMUTE:
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /unmute <group_id> <user_id> – remove the user's mute (allow sending messages again)
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -790,7 +745,6 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(ef, version=2), parse_mode='MarkdownV2')
         return
 
-    # restore normal perms
     perms = ChatPermissions(
         can_send_messages=True,
         can_send_media_messages=True,
@@ -808,7 +762,6 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not unmute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# -------------- Permission Types for /limit --------------
 VALID_PERMISSION_TYPES = [
     "text",
     "photos",
@@ -826,15 +779,10 @@ VALID_PERMISSION_TYPES = [
 ]
 
 async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /limit <group_id> <user_id> <permission_type> <on/off>
-    toggles a specific permission for normal members
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
 
-    # parse arguments
     if len(context.args) != 4:
         msg = (
             "⚠️ Usage: `/limit <group_id> <user_id> <permission_type> <on/off>`\n"
@@ -854,13 +802,11 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # check if group is registered
     if not group_exists(g_id):
         w = f"⚠️ Group `{g_id}` not registered."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
         return
 
-    # optional: check if group is supergroup
     try:
         chat_info = await context.bot.get_chat(g_id)
         if chat_info.type != "supergroup":
@@ -868,12 +814,9 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user.id, text=escape_markdown(note, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error get_chat for group {g_id}: {e}")
-        pass
 
-    # check the user status
     try:
         target_member = await context.bot.get_chat_member(chat_id=g_id, user_id=u_id)
-        # If user is admin or creator, we can't restrict them
         if target_member.status in ["administrator", "creator"]:
             wr = (
                 f"⚠️ Cannot restrict user `{u_id}` because they're an admin/creator.\n"
@@ -887,7 +830,6 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # Build permissions
     def off():
         return toggle == "off"
 
@@ -925,7 +867,6 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         can_add_web_page_previews=True
     )
 
-    # Attempt to apply
     try:
         await context.bot.restrict_chat_member(chat_id=g_id, user_id=u_id, permissions=perms)
         msg = (
@@ -995,10 +936,6 @@ async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ------------------- Deletion / Filtering Handlers -------------------
 
 def has_arabic(text):
-    """
-    Returns True if 'text' contains any Arabic letters.
-    We use the Unicode range \u0600-\u06FF to detect Arabic characters.
-    """
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1009,13 +946,11 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     user = msg.from_user
     chat_id = msg.chat.id
 
-    # If not enabled for this group, or user is bypassed, do nothing
     if not is_deletion_enabled(chat_id):
         return
     if is_bypass_user(user.id):
         return
 
-    # check text or caption
     text_or_caption = (msg.text or msg.caption or "")
     if text_or_caption and has_arabic(text_or_caption):
         try:
@@ -1025,7 +960,6 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Error deleting Arabic message: {e}")
         return
 
-    # If PDF, check its text
     if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
         if pdf_available:
             file_id = msg.document.file_id
@@ -1053,10 +987,9 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     except:
                         pass
 
-    # If photo, do OCR check
     if msg.photo:
         if pytesseract_available and pillow_available:
-            photo_obj = msg.photo[-1]  # highest resolution
+            photo_obj = msg.photo[-1]
             file_id = photo_obj.file_id
             file_ref = await context.bot.get_file(file_id)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
@@ -1267,13 +1200,10 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
 # ----------------------------------------------------------------------
-# NEW Commands: /delete <group_id> and /msg <group_id>
+# Commands: /delete <group_id> and /msg <group_id>
 # ----------------------------------------------------------------------
 
 async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /delete <group_id> 
-        Then bot asks for the message link or ID to delete.
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -1289,12 +1219,6 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text="⚠️ group_id must be integer.")
         return
 
-    # Check if group is registered (optional)
-    # if not group_exists(group_id):
-    #     await context.bot.send_message(chat_id=user.id, text=f"⚠️ Group {group_id} is not in DB, but continuing anyway.")
-    #     # not strictly necessary to block
-
-    # set user flow
     user_flows[user.id] = {
         "mode": "delete",
         "step": "await_link",
@@ -1310,9 +1234,6 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /msg <group_id> 
-        Then the bot asks for the text to send, then confirms.
-    """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -1328,7 +1249,6 @@ async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text="⚠️ group_id must be integer.")
         return
 
-    # set user flow
     user_flows[user.id] = {
         "mode": "msg",
         "step": "await_text",
@@ -1339,18 +1259,11 @@ async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"Please type the message you want to send to group `{group_id}`."
     )
 
-
 def parse_message_link(link_text: str):
-    """
-    Tries to parse a Telegram message link of the form:
-    https://t.me/c/123456789/100
-    Return the message ID if found, else None.
-    """
     match = re.search(r't\.me/c/\d+/(?P<msgid>\d+)', link_text)
     if match:
         return int(match.group('msgid'))
     return None
-
 
 # ------------------- main() -------------------
 
@@ -1394,7 +1307,6 @@ def main():
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
 
-    # New commands for deleting a message by link, and sending a message with confirmation
     app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CommandHandler("msg", msg_cmd))
 
@@ -1410,8 +1322,9 @@ def main():
         delete_any_messages
     ))
     # 3) handle group naming or flows (/delete, /msg)
+    # CHANGE HERE: remove "~filters.COMMAND" to allow the next text, even if it looks like an /command
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
+        filters.TEXT,  # <--- changed to allow all text
         handle_group_name_reply
     ))
 
